@@ -24,18 +24,18 @@ C = 0.01
 # Theano 符号变量
 X = T.matrix('X')
 y = T.vector('y')
-w = utils.randomInit((n,), 'w')
-b = shared(0., name='b')
+w = shared(utils.floatX(np.random.randn(n) * 0.01), name='w', borrow=True)
+b = shared(1., name='b', borrow=True)
 
 # 构建 Theano 表达式
 yProb = model(X, w, b)
 yPred = yProb > 0.5
 crossEntropy = -y * T.log(yProb) - (1 - y) * T.log(1 - yProb)
-cost = T.mean(crossEntropy) + C * T.sum(w ** 2)
+cost = T.mean(crossEntropy) + C * T.mean(w ** 2)
 prams = [w, b]  # 所有需要优化的参数放入列表中
 updates = utils.sgd(cost, prams, learningRate)
 
-# 编译训练函数
+# 编译函数
 train = function(
     inputs=[X, y],
     outputs=[yPred, cost],
