@@ -8,7 +8,7 @@ import theano.tensor as T
 from theano import function, shared
 import matplotlib.pyplot as plt
 
-from demo.load_mnist import mnist
+from load import mnist
 import utils
 
 

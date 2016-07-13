@@ -1,15 +1,22 @@
 # coding:utf-8
 __author__ = 'zfh'
-
+'''
+训练技巧：
+1、使用线性修正单元（relu）作为激活函数
+2、每一层加入dropout
+3、参数更新方式采用rmsprop
+4、使用mini-batch分批训练
+'''
 from compiler.ast import flatten
 import time
 
 import numpy as np
 import theano.tensor as T
+
 from theano import function
 import matplotlib.pyplot as plt
 
-from demo.load_mnist import mnist
+from load import mnist
 import utils
 
 

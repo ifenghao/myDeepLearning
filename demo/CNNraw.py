@@ -10,21 +10,26 @@ from theano.tensor.nnet.conv import conv2d
 from theano.tensor.signal.downsample import max_pool_2d
 import matplotlib.pyplot as plt
 
-from demo.load_mnist import mnist
+from load import mnist
 import utils
+
+
+def softmax(X):
+    e_x = T.exp(X - X.max(axis=1).dimshuffle(0, 'x'))
+    return e_x / e_x.sum(axis=1).dimshuffle(0, 'x')
 
 
 # 模型构建，返回给定样本判定为某类别的概率
 def model(X, wconv1, bconv1, wconv2, bconv2, wconv3, bconv3, wfull, bfull, wout, bout):
-    lconv1 = T.nnet.sigmoid(conv2d(X, wconv1, border_mode='full') + bconv1)
+    lconv1 = T.nnet.sigmoid(conv2d(X, wconv1, border_mode='full') + bconv1.dimshuffle('x', 0, 'x', 'x'))
     lds1 = max_pool_2d(lconv1, (2, 2))
-    lconv2 = T.nnet.sigmoid(conv2d(lds1, wconv2) + bconv2)
+    lconv2 = T.nnet.sigmoid(conv2d(lds1, wconv2) + bconv2.dimshuffle('x', 0, 'x', 'x'))
     lds2 = max_pool_2d(lconv2, (2, 2))
-    lconv3 = T.nnet.sigmoid(conv2d(lds2, wconv3) + bconv3)
+    lconv3 = T.nnet.sigmoid(conv2d(lds2, wconv3) + bconv3.dimshuffle('x', 0, 'x', 'x'))
     lds3 = max_pool_2d(lconv3, (2, 2))
     lflat = T.flatten(lds3, outdim=2)
     lfull = T.nnet.sigmoid(T.dot(lflat, wfull) + bfull)
-    return T.nnet.softmax(T.dot(lfull, wout) + bout)
+    return softmax(T.dot(lfull, wout) + bout)
 
 # 常量
 m = 60000  # 样本数
@@ -43,15 +48,15 @@ trX = trX.reshape(-1, 1, 28, 28)
 teX = teX.reshape(-1, 1, 28, 28)
 
 # Theano 符号变量
-X = T.ftensor4('X')
-Y = T.fmatrix('Y')
+X = T.tensor4('X')
+Y = T.matrix('Y')
 # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（1，本层特征图个数，1，1）
 wconv1 = utils.weightInit((32, 1, 3, 3), 'wconv1')
-bconv1 = utils.biasConvInit((1, 32, 1, 1), 'bconv1')
+bconv1 = utils.biasInit((32,), 'bconv1')
 wconv2 = utils.weightInit((64, 32, 3, 3), 'wconv2')
-bconv2 = utils.biasConvInit((1, 64, 1, 1), 'bconv2')
+bconv2 = utils.biasInit((64,), 'bconv2')
 wconv3 = utils.weightInit((128, 64, 3, 3), 'wconv3')
-bconv3 = utils.biasConvInit((1, 128, 1, 1), 'bconv3')
+bconv3 = utils.biasInit((128,), 'bconv3')
 # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
 wfull = utils.weightInit((128 * 3 * 3, hiddens), 'wfull')
 bfull = utils.biasInit((hiddens,), 'bfull')

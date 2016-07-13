@@ -15,7 +15,7 @@ from theano import function
 from theano.tensor.nnet.conv import conv2d
 from theano.tensor.signal.downsample import max_pool_2d
 import pylab
-from load import mnist
+from load import cifar
 import utils
 
 
@@ -51,46 +51,47 @@ def model(X, prams, pDropConv, pDropHidden):
     return softmax(T.dot(lfull, prams[4][0]) + prams[4][1])  # 如果使用nnet中的softmax训练出错
 
 # 常量
-m = 60000  # 样本数
-n = 784  # 特征维度
 iterSteps = 100
 learningRate = 0.001
 C = 0.001
+fin = 3
+f1 = 48
+f2 = 80
+f3 = 112
 hiddens = 625
 outputs = 10
 batchSize = 200
 
-# 数据集
-trX, teX, trY, teY = mnist(onehot=True)
-# 数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
-trX = trX.reshape(-1, 1, 28, 28)
-teX = teX.reshape(-1, 1, 28, 28)
+# 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
+trX, teX, trY, teY = cifar(onehot=True)
+m = trX.shape[0]  # 样本数
+n = np.prod(trX.shape[1:])  # 特征维度
 
 # Theano 符号变量
 X = T.tensor4('X')
 Y = T.matrix('Y')
 prams = []  # 所有需要优化的参数放入列表中，分别是连接权重和偏置
 # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
-# conv: (28+5-1 , 28+5-1) = (32, 32)
-# pool: (32/2, 32/2) = (16, 16)
-wconv1 = utils.weightInit((32, 1, 5, 5), 'wconv1')
-bconv1 = utils.biasInit((32,), 'bconv1')
+# conv: (32+5-1 , 32+5-1) = (36, 36)
+# pool: (36/2, 36/2) = (18, 18)
+wconv1 = utils.weightInitConv((f1, fin, 5, 5), 2 * 2, 'wconv1')
+bconv1 = utils.biasInit((f1,), 'bconv1')
 prams.append([wconv1, bconv1])
-# conv: (16-3+1 , 16-3+1) = (14, 14)
-# pool: (14/2, 14/2) = (7, 7)
-wconv2 = utils.weightInit((64, 32, 3, 3), 'wconv2')
-bconv2 = utils.biasInit((64,), 'bconv2')
+# conv: (18-3+1 , 18-3+1) = (16, 16)
+# pool: (16/2, 16/2) = (8, 8)
+wconv2 = utils.weightInitConv((f2, f1, 3, 3), 2 * 2, 'wconv2')
+bconv2 = utils.biasInit((f2,), 'bconv2')
 prams.append([wconv2, bconv2])
-# conv: (7-3+1 , 7-3+1) = (5, 5)
-# pool: (5/2, 5/2) = (3, 3)
-wconv3 = utils.weightInit((128, 64, 3, 3), 'wconv3')
-bconv3 = utils.biasInit((128,), 'bconv3')
+# conv: (8-3+1 , 8-3+1) = (6, 6)
+# pool: (6/2, 6/2) = (3, 3)
+wconv3 = utils.weightInitConv((f3, f2, 3, 3), 2 * 2, 'wconv3')
+bconv3 = utils.biasInit((f3,), 'bconv3')
 prams.append([wconv3, bconv3])
 # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-wfull = utils.weightInit((128 * 3 * 3, hiddens), 'wfull')
+wfull = utils.weightInitMLP((f3 * 3 * 3, hiddens), 'wfull')
 bfull = utils.biasInit((hiddens,), 'bfull')
 prams.append([wfull, bfull])
-wout = utils.weightInit((hiddens, outputs), 'wout')
+wout = utils.weightInitMLP((hiddens, outputs), 'wout')
 bout = utils.biasInit((outputs,), 'bout')
 prams.append([wout, bout])
 
