@@ -9,9 +9,9 @@ __author__ = 'zfh'
 '''
 from compiler.ast import flatten
 import time
-import numpy as np
+from copy import copy
 import theano.tensor as T
-from theano import function
+from theano import function, In, Out
 from theano.tensor.nnet.conv import conv2d
 from theano.tensor.signal.downsample import max_pool_2d
 import pylab
@@ -64,71 +64,91 @@ batchSize = 200
 
 # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
 trX, teX, trY, teY = cifar(onehot=True)
-m = trX.shape[0]  # 样本数
-n = np.prod(trX.shape[1:])  # 特征维度
+trSize = trX.shape[0]  # 训练集样本数
+teSize = teX.shape[0]  # 测试集样本数
+trXshared, trYshared = utils.datasetShared(trX, trY, 'trXshared', 'trYshared')  # 数据集复制为GPU共享变量
+teXshared, teYshared = utils.datasetShared(teX, teY, 'teXshared', 'teYshared')
 
 # Theano 符号变量
 X = T.tensor4('X')
 Y = T.matrix('Y')
+batchStart = T.lscalar('start')
+batchEnd = T.lscalar('end')
 prams = []  # 所有需要优化的参数放入列表中，分别是连接权重和偏置
 # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
-# conv: (32+5-1 , 32+5-1) = (36, 36)
-# pool: (36/2, 36/2) = (18, 18)
-wconv1 = utils.weightInitConv((f1, fin, 5, 5), 2 * 2, 'wconv1')
+# conv: (32+3-1 , 32+3-1) = (34, 34)
+# pool: (34/2, 34/2) = (17, 17)
+wconv1 = utils.weightInit((f1, fin, 3, 3), 'wconv1')
 bconv1 = utils.biasInit((f1,), 'bconv1')
 prams.append([wconv1, bconv1])
-# conv: (18-3+1 , 18-3+1) = (16, 16)
-# pool: (16/2, 16/2) = (8, 8)
-wconv2 = utils.weightInitConv((f2, f1, 3, 3), 2 * 2, 'wconv2')
+# conv: (17-3+1 , 17-3+1) = (15, 15)
+# pool: (15/2, 15/2) = (8, 8)
+wconv2 = utils.weightInit((f2, f1, 3, 3), 'wconv2')
 bconv2 = utils.biasInit((f2,), 'bconv2')
 prams.append([wconv2, bconv2])
 # conv: (8-3+1 , 8-3+1) = (6, 6)
 # pool: (6/2, 6/2) = (3, 3)
-wconv3 = utils.weightInitConv((f3, f2, 3, 3), 2 * 2, 'wconv3')
+wconv3 = utils.weightInit((f3, f2, 3, 3), 'wconv3')
 bconv3 = utils.biasInit((f3,), 'bconv3')
 prams.append([wconv3, bconv3])
 # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-wfull = utils.weightInitMLP((f3 * 3 * 3, hiddens), 'wfull')
+wfull = utils.weightInit2MLP((f3 * 3 * 3, hiddens), 'wfull')
 bfull = utils.biasInit((hiddens,), 'bfull')
 prams.append([wfull, bfull])
-wout = utils.weightInitMLP((hiddens, outputs), 'wout')
+wout = utils.weightInit2MLP((hiddens, outputs), 'wout')
 bout = utils.biasInit((outputs,), 'bout')
 prams.append([wout, bout])
 
 # 构建 Theano 表达式
-yDropProb = model(X, prams, 0.2, 0.5)
-yFullProb = model(X, prams, 0., 0.)
-yPred = T.argmax(yFullProb, axis=1)
-crossEntropy = T.nnet.categorical_crossentropy(yDropProb, Y)
+YDropProb = model(X, prams, 0.2, 0.5)
+YFullProb = model(X, prams, 0., 0.)
+YPred = T.argmax(YFullProb, axis=1)
+crossEntropy = T.nnet.categorical_crossentropy(YDropProb, Y)
 cost = T.mean(crossEntropy) + C * utils.reg(flatten(prams))
 updates = utils.rmsprop(cost, flatten(prams), lr=learningRate)
 
 # 编译函数
 train = function(
-    inputs=[X, Y],
-    outputs=[yPred, cost],
+    inputs=[In(batchStart, borrow=True, allow_downcast=True),
+            In(batchEnd, borrow=True, allow_downcast=True)],  # 输入为batch索引的起始和终止
+    outputs=Out(utils.errors(YDropProb, Y), borrow=True),  # 输出训练误差，减少返回参数节省时间
     updates=updates,
+    givens={
+        X: trXshared[batchStart:batchEnd],  # 将训练集X，Y替换为共享数据集trX，trY的切片
+        Y: trYshared[batchStart:batchEnd]
+    },
+    allow_input_downcast=True
+)
+test = function(
+    inputs=[In(batchStart, borrow=True, allow_downcast=True),
+            In(batchEnd, borrow=True, allow_downcast=True)],  # 输入为batch索引的起始和终止
+    outputs=Out(utils.errors(YFullProb, Y), borrow=True),  # 输出测试误差，减少返回参数节省时间
+    givens={
+        X: teXshared[batchStart:batchEnd],  # 将训练集X，Y替换为共享数据集trX，trY的切片
+        Y: teYshared[batchStart:batchEnd]
+    },
     allow_input_downcast=True
 )
 predict = function(
-    inputs=[X],
-    outputs=yPred,
+    inputs=[In(X, borrow=True, allow_downcast=True)],  # 从CPU读取数据集输入
+    outputs=Out(YPred, borrow=True),  # 返回预测值给CPU
     allow_input_downcast=True
 )
 
 # 训练迭代，一次迭代分为多batch训练
-accuracyTrace = []
+errorTrace = []
 start = time.time()
 for i in range(iterSteps):
     epochStart = time.time()
-    for start, end in zip(range(0, m, batchSize), range(batchSize, m, batchSize)):
-        pred, err = train(trX[start:end], trY[start:end])
-    accuracy = np.mean(predict(teX) == np.argmax(teY, axis=1))
-    accuracyTrace.append(accuracy)
-    print 'accuracy:', accuracy, 'time delay:', time.time() - epochStart
+    for start, end in zip(range(0, trSize, batchSize), range(batchSize, trSize, batchSize)):
+        trError = train(start, end)
+        print 'trError:', trError, '\r',
+    teError = test(0, teSize)
+    errorTrace.append(copy(teError))
+    print 'teError:', teError, 'time delay:', time.time() - epochStart
 print 'total time:', time.time() - start
 
-pylab.plot(accuracyTrace, 'b-')
+pylab.plot(errorTrace, 'b-')
 pylab.show()
 
 featureMaps = utils.listFeatureMap(trX[:5], prams)

@@ -54,7 +54,7 @@ def mnist(ntrain=60000, ntest=10000, onehot=True):
 def cifar(onehot=True):
     data_dir = os.path.join(datasets_dir, 'cifar-10-batches-py/')
     allFiles = os.listdir(data_dir)
-    trFiles = [f for f in allFiles if f.find('data_batch') != -1]
+    trFiles = [f for f in allFiles if f.startswith('data_batch')]
     trX = []
     trY = []
     for file in trFiles:
