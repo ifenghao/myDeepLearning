@@ -6,6 +6,8 @@ import theano
 import theano.tensor as T
 from theano import function
 import utils
+import os,cPickle
+import pylab
 
 # x=np.ones((10,1,3,3))
 # y=np.ones((10,1,1,1))*2
@@ -75,11 +77,14 @@ import utils
 # print np.split(a2,4,axis=0)
 # print utils.squareStack(a2)
 
-from load import cifar
-trX, teX, trY, teY=cifar()
-print trX.shape, teX.shape, trY.shape, teY.shape
-# import os,cPickle
-# import pylab
+# from load import cifar
+# import colorsys
+# trX, teX, trY, teY=cifar()
+# x=trX[0]
+# x=np.stack((x[0],x[1],x[2]),axis=2)
+# y=colorsys.rgb_to_hsv(x[0],x[1],x[2])
+# pylab.imshow(x)
+# pylab.show()
 # fd = open(os.path.join('/home/zfh/dataset/cifar-10-batches-py/', 'data_batch_1'))
 # dict = cPickle.load(fd)
 # fd.close()
@@ -89,3 +94,44 @@ print trX.shape, teX.shape, trY.shape, teY.shape
 # image=np.stack((image[2][0],image[2][1],image[2][2]),axis=2)
 # pylab.imshow(image)
 # pylab.show()
+
+# from sklearn.cross_validation import KFold
+# X, y = np.arange(40).reshape((5,2, 2,2)), np.arange(10).reshape((5,2))
+# kf=KFold(5,n_folds=2)
+# for i,j in kf:
+#     print X[i]
+#     print y[i]
+#     print X[j]
+#     print y[j]
+
+# def f():
+#     a=[]
+#     b=[]
+#     while True:
+#         new=(yield a,b)
+#         if new is not None:
+#             a.append(new[0])
+#             b.append(new[1])
+#
+# a=f()
+# print a.next()
+# for i in range(10):
+#     print a.send((i,i+10))
+
+
+# x=np.arange(10)
+# y=np.arange(10,20)
+# gen=utils.earlyStopGen()
+# gen.next()
+# for i,j in zip(x,y):
+#     print gen.send((i,j))
+
+# x=np.ones((1,1,10,10))*2
+# y=np.ones((1,1,3,3))
+#
+# X=T.tensor4()
+# Y=T.tensor4()
+# z=T.nnet.conv2d(X,Y,border_mode='half')
+# ff=function([X,Y],z)
+#
+# print ff(x,y)

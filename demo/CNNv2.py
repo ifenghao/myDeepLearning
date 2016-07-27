@@ -111,7 +111,7 @@ updates = utils.rmsprop(cost, flatten(prams), lr=learningRate)
 train = function(
     inputs=[In(batchStart, borrow=True, allow_downcast=True),
             In(batchEnd, borrow=True, allow_downcast=True)],  # 输入为batch索引的起始和终止
-    outputs=Out(utils.errors(YDropProb, Y), borrow=True),  # 输出训练误差，减少返回参数节省时间
+    outputs=Out(utils.neqs(YDropProb, Y), borrow=True),  # 输出训练误差，减少返回参数节省时间
     updates=updates,
     givens={
         X: trXshared[batchStart:batchEnd],  # 将训练集X，Y替换为共享数据集trX，trY的切片
@@ -122,7 +122,7 @@ train = function(
 test = function(
     inputs=[In(batchStart, borrow=True, allow_downcast=True),
             In(batchEnd, borrow=True, allow_downcast=True)],  # 输入为batch索引的起始和终止
-    outputs=Out(utils.errors(YFullProb, Y), borrow=True),  # 输出测试误差，减少返回参数节省时间
+    outputs=Out(utils.neqs(YFullProb, Y), borrow=True),  # 输出测试误差，减少返回参数节省时间
     givens={
         X: teXshared[batchStart:batchEnd],  # 将训练集X，Y替换为共享数据集trX，trY的切片
         Y: teYshared[batchStart:batchEnd]

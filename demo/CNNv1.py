@@ -13,8 +13,8 @@ import time
 from copy import copy
 import theano.tensor as T
 from theano import function, In, Out
-from theano.tensor.nnet.conv import conv2d
-from theano.tensor.signal.downsample import max_pool_2d
+from theano.tensor.nnet import conv2d, categorical_crossentropy, relu
+from theano.tensor.signal.pool import pool_2d
 import pylab
 from load import cifar
 import utils
@@ -31,25 +31,25 @@ def softmax(X):
 # 每次调用dropout的模式都不同，即在每轮训练中网络结构都不同
 # 本层的每个特征图和上层的所有特征图连接，可以不用去选择一些组合来部分连接
 def model(X, prams, pDropConv, pDropHidden):
-    lconv1 = T.nnet.relu(conv2d(X, prams[0][0], border_mode='full') +
-                         prams[0][1].dimshuffle('x', 0, 'x', 'x'))
-    lds1 = max_pool_2d(lconv1, (2, 2))
+    lconv1 = relu(conv2d(X, prams[0][0], border_mode='full') +
+                  prams[0][1].dimshuffle('x', 0, 'x', 'x'))
+    lds1 = pool_2d(lconv1, (2, 2))
     lds1 = utils.dropout(lds1, pDropConv)
 
-    lconv2 = T.nnet.relu(conv2d(lds1, prams[1][0]) +
-                         prams[1][1].dimshuffle('x', 0, 'x', 'x'))
-    lds2 = max_pool_2d(lconv2, (2, 2))
+    lconv2 = relu(conv2d(lds1, prams[1][0]) +
+                  prams[1][1].dimshuffle('x', 0, 'x', 'x'))
+    lds2 = pool_2d(lconv2, (2, 2))
     lds2 = utils.dropout(lds2, pDropConv)
 
-    lconv3 = T.nnet.relu(conv2d(lds2, prams[2][0]) +
-                         prams[2][1].dimshuffle('x', 0, 'x', 'x'))
-    lds3 = max_pool_2d(lconv3, (2, 2))
+    lconv3 = relu(conv2d(lds2, prams[2][0]) +
+                  prams[2][1].dimshuffle('x', 0, 'x', 'x'))
+    lds3 = pool_2d(lconv3, (2, 2))
     lds3 = utils.dropout(lds3, pDropConv)
 
     lflat = T.flatten(lds3, outdim=2)
-    lfull = T.nnet.relu(T.dot(lflat, prams[3][0]) + prams[3][1])
+    lfull = relu(T.dot(lflat, prams[3][0]) + prams[3][1])
     lfull = utils.dropout(lfull, pDropHidden)
-    return softmax(T.dot(lfull, prams[4][0]) + prams[4][1])  # 如果使用nnet中的softmax训练出错
+    return softmax(T.dot(lfull, prams[4][0]) + prams[4][1])  # 如果使用nnet中的softmax训练产生NAN
 
 # 常量
 iterSteps = 100
@@ -100,7 +100,7 @@ prams.append([wout, bout])
 YDropProb = model(X, prams, 0.2, 0.5)
 YFullProb = model(X, prams, 0., 0.)
 YPred = T.argmax(YFullProb, axis=1)
-crossEntropy = T.nnet.categorical_crossentropy(YDropProb, Y)
+crossEntropy = categorical_crossentropy(YDropProb, Y)
 cost = T.mean(crossEntropy) + C * utils.reg(flatten(prams))
 updates = utils.rmsprop(cost, flatten(prams), lr=learningRate)
 
@@ -109,7 +109,7 @@ updates = utils.rmsprop(cost, flatten(prams), lr=learningRate)
 train = function(
     inputs=[In(X, borrow=True, allow_downcast=True),
             In(Y, borrow=True, allow_downcast=True)],
-    outputs=Out(utils.errors(YDropProb, Y), borrow=True),  # 减少返回参数节省时间
+    outputs=Out(utils.neqs(YDropProb, Y), borrow=True),  # 减少返回参数节省时间
     updates=updates,
     allow_input_downcast=True
 )
@@ -117,7 +117,7 @@ train = function(
 test = function(
     inputs=[In(X, borrow=True, allow_downcast=True),
             In(Y, borrow=True, allow_downcast=True)],
-    outputs=Out(utils.errors(YFullProb, Y), borrow=True),  # 减少返回参数节省时间
+    outputs=Out(utils.neqs(YFullProb, Y), borrow=True),  # 减少返回参数节省时间
     allow_input_downcast=True
 )
 # 预测函数，只输入X，输出预测结果

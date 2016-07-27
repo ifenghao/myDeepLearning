@@ -1,3 +1,4 @@
+# coding:utf-8
 import numpy as np
 import os, getpass
 import cPickle
@@ -14,6 +15,7 @@ def one_hot(x, n):
     return o_h
 
 
+# 数据格式为2D矩阵（样本数，图像行数*图像列数）
 def mnist(ntrain=60000, ntest=10000, onehot=True):
     data_dir = os.path.join(datasets_dir, 'mnist/')
     fd = open(os.path.join(data_dir, 'train-images.idx3-ubyte'))
@@ -51,6 +53,7 @@ def mnist(ntrain=60000, ntest=10000, onehot=True):
     return trX, teX, trY, teY
 
 
+# 数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
 def cifar(onehot=True):
     data_dir = os.path.join(datasets_dir, 'cifar-10-batches-py/')
     allFiles = os.listdir(data_dir)
@@ -78,6 +81,8 @@ def cifar(onehot=True):
         teY.extend(batchLabel)
         fd.close()
     teX = np.vstack(teX)
+    trX -= 128.
+    teX -= 128.
     if onehot:
         trY = one_hot(trY, 10)
         teY = one_hot(teY, 10)
