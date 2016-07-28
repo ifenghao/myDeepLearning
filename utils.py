@@ -1,7 +1,7 @@
 # coding:utf-8
 __author__ = 'zfh'
 import theano
-from theano import shared, function
+from theano import shared, function, In, Out
 from theano import tensor as T
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from theano.tensor.nnet import conv2d, relu
@@ -27,12 +27,35 @@ def datasetShared(X, Y, Xname, Yname):
     return XShared, YShared
 
 
+# 图像预处理，只进行零均值化和归一化，在训练集上计算RGB三个通道每个位置的均值，分别在训练、验证、测试集上减去
+def preprocess(trX, vateX):
+    avg = np.mean(trX, axis=0, dtype=theano.config.floatX, keepdims=True)
+    std = np.std(trX, axis=0, dtype=theano.config.floatX, keepdims=True)
+    return (trX - avg) / std, (vateX - avg) / std
+
+
+def makeFunc(inList, outList, updates):
+    inputs = []
+    for i in inList:
+        inputs.append(In(i, borrow=True, allow_downcast=True))
+    outputs = []
+    for o in outList:
+        outputs.append(Out(o, borrow=True))
+    return function(
+        inputs=inputs,
+        outputs=outputs,  # 减少返回参数节省时间
+        updates=updates,
+        allow_input_downcast=True
+    )
+
+
 # 参数初始化，在这里不能修改参数的broadcastable
 # 否则会引起更新参数值TensorType{float32,4D}与原始值的类型cudaNdarray{float32,broadcastable}不匹配
 def weightInit(shape, name):
     return shared(floatX(rng.randn(*shape) * 0.1), name=name, borrow=True)
 
 
+# 第二种参数初始化方法仅适用于零均值的输入情况，否则梯度下降很慢
 def weightInit2(shape, name):
     if len(shape) > 2:
         fanIn = np.prod(shape[1:])
@@ -44,8 +67,22 @@ def weightInit2(shape, name):
     return shared(floatX(rng.uniform(-bound, bound, shape)), name=name, borrow=True)
 
 
+# 第三种参数初始化方法仅适用于零均值的输入，且使用ReLU神经元的情况
+def weightInit3(shape, name):
+    if len(shape) > 2:
+        fanIn = np.prod(shape[1:])
+    else:
+        fanIn = shape[0]
+    bound = np.sqrt(2. / fanIn)
+    return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
+
+
 def biasInit(shape, name):
-    return shared(floatX(np.zeros(*shape)), name=name, borrow=True)
+    if len(shape) > 2:
+        bais = shared(floatX(np.zeros(shape[0])), name=name, borrow=True)
+    else:
+        bais = shared(floatX(np.zeros(shape[1])), name=name, borrow=True)
+    return bais
 
 
 def resetWeight(w):
@@ -63,6 +100,16 @@ def resetWeight2(w):
         fanOut = shape[1]
     bound = np.sqrt(6. / (fanIn + fanOut))
     w.set_value(floatX(rng.uniform(-bound, bound, shape)), borrow=True)
+
+
+def resetWeight3(w):
+    shape = w.get_value(borrow=True).shape
+    if len(shape) > 2:
+        fanIn = np.prod(shape[1:])
+    else:
+        fanIn = shape[0]
+    bound = np.sqrt(2. / fanIn)
+    w.set_value(floatX(rng.randn(*shape) * bound), borrow=True)
 
 
 def resetBias(b):
@@ -159,7 +206,7 @@ def miniBatch(X, Y, func, batchSize=128, verbose=True):
     return costMean
 
 
-def earlyStopGen(start=30, period=4, threshold=10, tol=2):
+def earlyStopGen(start=5, period=3, threshold=10, tol=2):
     '''
     早停止生成器，生成器可以保存之前传入的参数，从而在不断send入参数的过程中判断是否早停止训练
     :param start: 开始检测早停止的epoch，即至少完成多少epoch后才可以早停止
@@ -171,12 +218,15 @@ def earlyStopGen(start=30, period=4, threshold=10, tol=2):
     trCostPeriod = []
     vaCostPeriod = []
     vaCostOpt = np.inf
+    epoch = 0
     stopSign = False
     stopCount = 0
-    epoch = 0
     while True:
         newCosts = (yield stopSign)  # 返回是否早停止
         epoch += 1
+        if stopSign:  # 返回一个早停止标志后，重新检测
+            stopSign = False
+            stopCount = 0
         if epoch > start and newCosts is not None:  # send进来的元组在newCosts中
             trCost, vaCost = newCosts
             trCostPeriod.append(trCost)
@@ -201,8 +251,8 @@ def randomSearch(nIter):
     :param nIter: 迭代次数，即超参数组合个数
     :return: 超参数组合的二维列表
     '''
-    lr = [uniform(5, 50) * 1e-5 for _ in range(nIter)]
-    C = [uniform(1, 100) * 1e-3 for _ in range(nIter)]
+    lr = [uniform(5, 50) * 1e-4 for _ in range(nIter)]
+    C = [uniform(1, 100) * 1e-1 for _ in range(nIter)]
     # pDropConv = [uniform(0., 0.3) for _ in range(nIter)]
     # pDropHidden = [uniform(0., 0.5) for _ in range(nIter)]
     return zip(lr, C)
