@@ -128,10 +128,10 @@ class CConvNet(object):
 
     # 训练卷积网络，最终返回在测试集上的误差
     def traincn(self, trX, teX, trY, teY, batchSize=128, maxIter=100, verbose=True,
-                start=5, period=3, threshold=10, earlyStopTol=2, totalStopTol=3):
+                start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=3):
         lr = self.lr  # 当验证损失不再下降而早停止后，降低学习率继续迭代
         # 训练函数，输入训练集，输出训练损失和误差
-        updates = utils.rmsprop(self.trCost, flatten(self.params), lr)
+        updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
         train = utils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
         # 验证或测试函数，输入验证或测试集，输出损失和误差，不进行更新
         valtest = utils.makeFunc([self.X, self.Y], [self.vateCost, self.vateNeqs], None)
@@ -146,7 +146,7 @@ class CConvNet(object):
             if verbose: print ' time: %10.5f' % (time.time() - startTime)
             if earlyStop.send((trCost, teCost)):
                 lr /= 10  # 如果一次早停止发生，则学习率降低继续迭代
-                updates = utils.rmsprop(self.trCost, flatten(self.params), lr)
+                updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
                 train = utils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
                 totalStopCount += 1
                 if totalStopCount > totalStopTol: break  # 如果学习率降低仍然发生早停止，则退出迭代
@@ -154,14 +154,14 @@ class CConvNet(object):
 
     # 交叉验证得到一组平均验证误差，使用早停止
     def cv(self, X, Y, folds=3, batchSize=128, maxIter=100, verbose=True,
-           start=5, period=3, threshold=10, earlyStopTol=2, totalStopTol=3):
+           start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=3):
         # 训练集分为n折交叉验证集
         kf = KFold(X.shape[0], n_folds=folds, random_state=42)
         vaCostList = []
         for trIndex, vaIndex in kf:
             lr = self.lr  # 当验证损失不再下降而早停止后，降低学习率继续迭代
             # 训练函数，输入训练集，输出训练损失和误差
-            updates = utils.rmsprop(self.trCost, flatten(self.params), lr)
+            updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
             train = utils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
             # 验证或测试函数，输入验证或测试集，输出损失和误差，不进行更新
             valtest = utils.makeFunc([self.X, self.Y], [self.vateCost, self.vateNeqs], None)
@@ -180,13 +180,13 @@ class CConvNet(object):
                 if verbose: print ' time: %10.5f' % (time.time() - startTime)
                 if earlyStop.send((trCost, vaCost)):
                     lr /= 10  # 如果一次早停止发生，则学习率降低继续迭代
-                    updates = utils.rmsprop(self.trCost, flatten(self.params), lr)
+                    updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
                     train = utils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
                     totalStopCount += 1
                     if totalStopCount > totalStopTol: break  # 如果学习率降低仍然发生早停止，则退出迭代
                     if verbose: print 'learning rate decreases to ', lr
             vaCostList.append(copy(vaCostOpt))
-            if verbose: print '*' * 5, 'one validation done', '*' * 5
+            if verbose: print '*' * 10, 'one validation done, best vaCost', vaCostList, '*' * 10
             self.resetPrams()
         return np.mean(vaCostList)
 
@@ -205,7 +205,7 @@ def main():
     cvCostList = []
     for param, num in zip(params, range(len(params))):
         lr, C = param
-        print '*' * 10, num + 1, 'parameters', param, '*' * 10
+        print '*' * 40, num + 1, 'parameters', param, '*' * 40
         convNet = CConvNet(3, f1, f2, f3, f4, f5, h1, h2, 10, lr, C, 0, 0.5)
         cvCost = convNet.cv(trX, trY)
         cvCostList.append(copy(cvCost))
