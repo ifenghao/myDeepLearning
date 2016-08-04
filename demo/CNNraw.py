@@ -43,7 +43,6 @@ batchSize = 200
 
 # 数据集
 trX, teX, trY, teY = mnist(onehot=True)
-# 数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
 trX = trX.reshape(-1, 1, 28, 28)
 teX = teX.reshape(-1, 1, 28, 28)
 
@@ -52,16 +51,16 @@ X = T.tensor4('X')
 Y = T.matrix('Y')
 # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（1，本层特征图个数，1，1）
 wconv1 = utils.weightInit((32, 1, 3, 3), 'wconv1')
-bconv1 = utils.biasInit((32,), 'bconv1')
+bconv1 = utils.biasInitCNN2((32,), 'bconv1')
 wconv2 = utils.weightInit((64, 32, 3, 3), 'wconv2')
-bconv2 = utils.biasInit((64,), 'bconv2')
+bconv2 = utils.biasInitCNN2((64,), 'bconv2')
 wconv3 = utils.weightInit((128, 64, 3, 3), 'wconv3')
-bconv3 = utils.biasInit((128,), 'bconv3')
+bconv3 = utils.biasInitCNN2((128,), 'bconv3')
 # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
 wfull = utils.weightInit((128 * 3 * 3, hiddens), 'wfull')
-bfull = utils.biasInit((hiddens,), 'bfull')
+bfull = utils.biasInitCNN2((hiddens,), 'bfull')
 wout = utils.weightInit((hiddens, outputs), 'wout')
-bout = utils.biasInit((outputs,), 'bout')
+bout = utils.biasInitCNN2((outputs,), 'bout')
 
 # 构建 Theano 表达式
 yProb = model(X, wconv1, bconv1, wconv2, bconv2, wconv3, bconv3, wfull, bfull, wout, bout)
@@ -75,7 +74,7 @@ cost = T.mean(crossEntropy) + C * (
     T.mean(wout ** 2) + T.mean(bout ** 2)
 )
 gradPrams = [wconv1, bconv1, wconv2, bconv2, wconv3, bconv3, wfull, bfull, wout, bout]  # 所有需要优化的参数放入列表中
-updates = utils.sgd_momentum(cost, gradPrams, learningRate)
+updates = utils.sgdm(cost, gradPrams, learningRate)
 
 # 编译函数
 train = function(

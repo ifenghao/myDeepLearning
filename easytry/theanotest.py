@@ -119,8 +119,8 @@ import pylab
 #     print a.send((i,i+10))
 
 
-# x=np.arange(10)
-# y=np.arange(10,20)
+# x=np.arange(50)
+# y=np.arange(50,100)
 # gen=utils.earlyStopGen()
 # gen.next()
 # for i,j in zip(x,y):
@@ -134,4 +134,60 @@ import pylab
 # z=T.nnet.conv2d(X,Y,border_mode='half')
 # ff=function([X,Y],z)
 #
+# print ff(x,y)
+
+# x=np.arange(24).reshape((2,3,2,2))
+# avg=np.mean(x,axis=0,dtype=float,keepdims=False)
+# std=np.std(x,axis=0)
+# print avg,std
+
+# from theano.tensor.signal.pool import pool_2d
+# x=np.ones((1,1,10,10))*2
+#
+# X=T.tensor4()
+# z=pool_2d(X,(2,2),st=(1,1),ignore_border=True,padding=(1,1))
+# ff=function([X],z)
+#
+# print ff(x)
+
+# x=np.random.uniform(1,100,100)
+# y=np.random.uniform(0,100,100)
+# z=np.random.uniform(0,10,100)
+# utils.scatter(x,y,z)
+
+# import re
+# pattern1=re.compile('(\(.*?\))')
+# pattern2=re.compile('(\[.*?\])')
+#
+# lrList=[]
+# cList=[]
+# error=[]
+# with open('/home/zfh/new') as file:
+#     lines=file.read()
+#     match1=pattern1.findall(lines)
+#     match2=pattern2.findall(lines)
+#     for m1,m2 in zip(match1,match2):
+#         split=m1[1:-1].split(', ')
+#         lrList.append(float(split[0]))
+#         cList.append(float(split[1]))
+#         error.append(float(m2[1:-1]))
+
+# error=np.array(error)
+# error=error[np.where(error<0.25)]
+# lrList=np.array(lrList)
+# lrList=lrList[np.where(error<0.25)]
+# cList=np.array(cList)
+# cList=cList[np.where(error<0.25)]
+# utils.scatter(lrList,cList,error)
+
+# x=np.arange(10).reshape((5,2))
+# y=np.arange(24).reshape((4,2,3))
+#
+# X=T.matrix()
+# Y=T.tensor3()
+# z=T.dot(X,Y)
+# ff=function([X,Y],[z,T.max(z,axis=1)])
+#
+# print x
+# print y
 # print ff(x,y)

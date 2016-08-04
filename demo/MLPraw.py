@@ -44,7 +44,7 @@ yPred = T.argmax(yProb, axis=1)
 crossEntropy = T.nnet.categorical_crossentropy(yProb, Y)
 cost = T.mean(crossEntropy) + C * utils.reg((w1, b1, w2, b2))
 gradPrams = [w1, b1, w2, b2]  # 所有需要优化的参数放入列表中
-updates = utils.sgd_momentum(cost, gradPrams, learningRate)
+updates = utils.sgdm(cost, gradPrams, learningRate)
 
 # 编译函数
 train = function(

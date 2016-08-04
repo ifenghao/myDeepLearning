@@ -9,11 +9,17 @@ from theano.tensor.signal.pool import pool_2d
 from random import uniform, randint
 import numpy as np
 import pylab
-import time
+from mpl_toolkits.mplot3d import Axes3D
 from copy import copy
+import cPickle, os
 
 srng = RandomStreams()
 rng = np.random.RandomState(23455)
+
+'''
+theano相关的操作
+'''
+
 
 # 转化为GPU格式的浮点数
 def floatX(x):
@@ -25,13 +31,6 @@ def datasetShared(X, Y, Xname, Yname):
     XShared = shared(floatX(X), name=Xname, borrow=True)
     YShared = shared(floatX(Y), name=Yname, borrow=True)
     return XShared, YShared
-
-
-# 图像预处理，只进行零均值化和归一化，在训练集上计算RGB三个通道每个位置的均值，分别在训练、验证、测试集上减去
-def preprocess(trX, vateX):
-    avg = np.mean(trX, axis=0, dtype=theano.config.floatX, keepdims=True)
-    std = np.std(trX, axis=0, dtype=theano.config.floatX, keepdims=True)
-    return (trX - avg) / std, (vateX - avg) / std
 
 
 def makeFunc(inList, outList, updates):
@@ -49,40 +48,76 @@ def makeFunc(inList, outList, updates):
     )
 
 
-# 参数初始化，在这里不能修改参数的broadcastable
-# 否则会引起更新参数值TensorType{float32,4D}与原始值的类型cudaNdarray{float32,broadcastable}不匹配
+'''
+图像预处理，只进行零均值化和归一化，在训练集上计算RGB三个通道每个位置的均值，分别在训练、验证、测试集上减去
+不用归一化有时候会出现nan，即计算的数值太大
+如果要使用标准差归一化，要注意有的位置上标准差为0，容易产生nan
+'''
+
+
+def preprocess(trX, vateX):
+    avg = np.mean(trX, axis=0, dtype=theano.config.floatX, keepdims=True)
+    return (trX - avg) / 128, (vateX - avg) / 128
+
+
+'''
+参数初始化，在这里不能修改参数的broadcastable
+否则会引起更新参数值TensorType{float32,4D}与原始值的类型cudaNdarray{float32,broadcastable}不匹配
+'''
+
+
 def weightInit(shape, name):
     return shared(floatX(rng.randn(*shape) * 0.1), name=name, borrow=True)
 
 
+def biasInit(shape, name):
+    return shared(floatX(np.zeros(shape)), name=name, borrow=True)
+
+
 # 第二种参数初始化方法仅适用于零均值的输入情况，否则梯度下降很慢
-def weightInit2(shape, name):
-    if len(shape) > 2:
-        fanIn = np.prod(shape[1:])
-        fanOut = shape[0] * np.prod(shape[2:])
-    else:
-        fanIn = shape[0]
-        fanOut = shape[1]
+def weightInitCNN2(shape, name):
+    fanIn = np.prod(shape[1:])
+    fanOut = shape[0] * np.prod(shape[2:])
+    bound = np.sqrt(6. / (fanIn + fanOut))
+    return shared(floatX(rng.uniform(-bound, bound, shape)), name=name, borrow=True)
+
+
+def weightInitMLP2(shape, name):
+    fanIn = shape[0]
+    fanOut = shape[1]
+    bound = np.sqrt(6. / (fanIn + fanOut))
+    return shared(floatX(rng.uniform(-bound, bound, shape)), name=name, borrow=True)
+
+
+def weightInitMaxout2(shape, name):
+    fanIn = shape[1]
+    fanOut = shape[2]
     bound = np.sqrt(6. / (fanIn + fanOut))
     return shared(floatX(rng.uniform(-bound, bound, shape)), name=name, borrow=True)
 
 
 # 第三种参数初始化方法仅适用于零均值的输入，且使用ReLU神经元的情况
-def weightInit3(shape, name):
-    if len(shape) > 2:
-        fanIn = np.prod(shape[1:])
-    else:
-        fanIn = shape[0]
+def weightInitCNN3(shape, name):
+    fanIn = np.prod(shape[1:])
     bound = np.sqrt(2. / fanIn)
     return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
 
 
-def biasInit(shape, name):
-    if len(shape) > 2:
-        bais = shared(floatX(np.zeros(shape[0])), name=name, borrow=True)
-    else:
-        bais = shared(floatX(np.zeros(shape[1])), name=name, borrow=True)
-    return bais
+def weightInitMLP3(shape, name):
+    fanIn = shape[0]
+    bound = np.sqrt(2. / fanIn)
+    return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
+
+
+def weightInitMaxout3(shape, name):
+    fanIn = shape[1]
+    bound = np.sqrt(2. / fanIn)
+    return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
+
+
+'''
+参数重置，方法和初始化配套
+'''
 
 
 def resetWeight(w):
@@ -90,31 +125,61 @@ def resetWeight(w):
     w.set_value(floatX(rng.randn(*wShape) * 0.1), borrow=True)
 
 
-def resetWeight2(w):
+def resetBias(b):
+    bShape = b.get_value(borrow=True).shape
+    b.set_value(floatX(np.zeros(*bShape)), borrow=True)
+
+
+# 2
+def resetWeightCNN2(w):
     shape = w.get_value(borrow=True).shape
-    if len(shape) > 2:
-        fanIn = np.prod(shape[1:])
-        fanOut = shape[0] * np.prod(shape[2:])
-    else:
-        fanIn = shape[0]
-        fanOut = shape[1]
+    fanIn = np.prod(shape[1:])
+    fanOut = shape[0] * np.prod(shape[2:])
     bound = np.sqrt(6. / (fanIn + fanOut))
     w.set_value(floatX(rng.uniform(-bound, bound, shape)), borrow=True)
 
 
-def resetWeight3(w):
+def resetWeightMLP2(w):
     shape = w.get_value(borrow=True).shape
-    if len(shape) > 2:
-        fanIn = np.prod(shape[1:])
-    else:
-        fanIn = shape[0]
+    fanIn = shape[0]
+    fanOut = shape[1]
+    bound = np.sqrt(6. / (fanIn + fanOut))
+    w.set_value(floatX(rng.uniform(-bound, bound, shape)), borrow=True)
+
+
+def resetWeightMaxout2(w):
+    shape = w.get_value(borrow=True).shape
+    fanIn = shape[1]
+    fanOut = shape[2]
+    bound = np.sqrt(6. / (fanIn + fanOut))
+    w.set_value(floatX(rng.uniform(-bound, bound, shape)), borrow=True)
+
+
+# 3
+def resetWeightCNN3(w):
+    shape = w.get_value(borrow=True).shape
+    fanIn = np.prod(shape[1:])
     bound = np.sqrt(2. / fanIn)
     w.set_value(floatX(rng.randn(*shape) * bound), borrow=True)
 
 
-def resetBias(b):
-    bShape = b.get_value(borrow=True).shape
-    b.set_value(floatX(np.zeros(*bShape)), borrow=True)
+def resetWeightMLP3(w):
+    shape = w.get_value(borrow=True).shape
+    fanIn = shape[0]
+    bound = np.sqrt(2. / fanIn)
+    w.set_value(floatX(rng.randn(*shape) * bound), borrow=True)
+
+
+def resetWeightMaxout3(w):
+    shape = w.get_value(borrow=True).shape
+    fanIn = shape[1]
+    bound = np.sqrt(2. / fanIn)
+    w.set_value(floatX(rng.randn(*shape) * bound), borrow=True)
+
+
+'''
+网络结构中需要计算的参量
+'''
 
 
 # 使用GPU时误差的计算，输入都必须是TensorType
@@ -136,7 +201,20 @@ def reg(pramsIter):
     return regSum / elementNum
 
 
-# 随机梯度下降得到权重更新
+# binomial生成与X维度一样的随机分布的0-1矩阵，其中1的比例为p，且每次调用生成的矩阵都不同
+def dropout(X, pDrop=0.):
+    if pDrop > 0:
+        pRetain = 1 - pDrop
+        X *= srng.binomial(X.shape, p=pRetain, dtype=theano.config.floatX)
+        X /= pRetain
+    return X
+
+
+'''
+随机梯度下降及其各种变形，为了得到权重更新
+'''
+
+
 def sgd(cost, params, lr=0.01):
     grads = T.grad(cost, params)
     updates = []
@@ -212,13 +290,9 @@ def adam(cost, params, lr=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8):
     return updates
 
 
-# binomial生成与X维度一样的随机分布的0-1矩阵，其中1的比例为p，且每次调用生成的矩阵都不同
-def dropout(X, pDrop=0.):
-    if pDrop > 0:
-        pRetain = 1 - pDrop
-        X *= srng.binomial(X.shape, p=pRetain, dtype=theano.config.floatX)
-        X /= pRetain
-    return X
+'''
+训练过程中的方法
+'''
 
 
 def miniBatch(X, Y, func, batchSize=128, verbose=True):
@@ -245,7 +319,7 @@ def miniBatch(X, Y, func, batchSize=128, verbose=True):
         neqAcc += neq
     costMean, error = np.mean(costList), float(neqAcc) / size
     if verbose: print 'costMean: %8.5f   error: %.5f' % (costMean, error),
-    return costMean
+    return costMean, error
 
 
 def earlyStopGen(start=5, period=3, threshold=10, tol=2):
@@ -293,11 +367,16 @@ def randomSearch(nIter):
     :param nIter: 迭代次数，即超参数组合个数
     :return: 超参数组合的二维列表
     '''
-    lr = [uniform(1, 20) * 1e-4 for _ in range(nIter)]
-    C = [uniform(5, 200) * 1e-1 for _ in range(nIter)]
+    lr = [uniform(1, 20) * 1e-3 for _ in range(nIter)]
+    C = [uniform(1, 500) * 1e-1 for _ in range(nIter)]
     # pDropConv = [uniform(0., 0.3) for _ in range(nIter)]
     # pDropHidden = [uniform(0., 0.5) for _ in range(nIter)]
     return zip(lr, C)
+
+
+'''
+辅助方法
+'''
 
 
 # 网络可视化
@@ -365,4 +444,25 @@ def showFeatureMap(featureMaps):
             pylab.imshow(mapList[k + 1])
             pylab.gray()
             plotPlace += 1
+    pylab.show()
+
+
+# 保存网络参数
+def dumpModel(convNet):
+    modelPickleFile = os.path.join(os.getcwd(), 'convNet' + '.pkl')
+    with open(modelPickleFile, 'w') as file:
+        cPickle.dump(convNet.params, file)
+
+
+# 参数选择可视化
+def surface(x, y, z):
+    ax = pylab.axes(projection='3d')
+    xx, yy = np.meshgrid(x, y)
+    ax.plot_surface(xx, yy, z)
+    pylab.show()
+
+
+def scatter(x, y, z):
+    ax = pylab.axes(projection='3d')
+    ax.scatter(x, y, z, c=z)
     pylab.show()

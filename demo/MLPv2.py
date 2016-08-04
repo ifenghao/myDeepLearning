@@ -1,23 +1,18 @@
 # coding:utf-8
 __author__ = 'zfh'
 '''
-训练技巧：
-1、使用线性修正单元（relu）作为激活函数
-2、每一层加入dropout
-3、参数更新方式采用rmsprop
-4、使用mini-batch分批训练
-5、使用borrow=True属性
-6、基于v1的结构增加了验证集上的超参数选取
+使用和CNNv4相同的格式
 '''
 from compiler.ast import flatten
 import time
-import theano.tensor as T
-from theano.tensor.nnet import conv2d, categorical_crossentropy, relu
-from theano.tensor.signal.pool import pool_2d
-from sklearn.cross_validation import KFold
 from copy import copy
+
+import theano.tensor as T
+from theano.tensor.nnet import categorical_crossentropy, relu
+from sklearn.cross_validation import KFold
 import numpy as np
-from load import cifar
+
+from load import mnist
 import utils
 
 
@@ -25,12 +20,6 @@ import utils
 def softmax(X):
     e_x = T.exp(X - X.max(axis=1).dimshuffle(0, 'x'))
     return e_x / e_x.sum(axis=1).dimshuffle(0, 'x')
-
-
-def layerCNNParams(shape):
-    w = utils.weightInitCNN3(shape, 'w')
-    b = utils.biasInit(shape[0], 'b')
-    return [w, b]
 
 
 def layerMLPParams(shape):
@@ -43,94 +32,39 @@ def layerMLPParams(shape):
 # dimshuffle在偏置插入维度使之与相加矩阵相同（1，本层特征图个数，1，1），插入维度的broadcastable=True
 # 每次调用dropout的模式都不同，即在每轮训练中网络结构都不同
 # 本层的每个特征图和上层的所有特征图连接，可以不用去选择一些组合来部分连接
-def model(X, params, pDropConv, pDropHidden):
-    # conv: (32, 32)
+def model(X, params, pDropHidden1, pDropHidden2):
     lnum = 0
-    layer = conv2d(X, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
+    layer = T.dot(X, params[lnum][0]) + params[lnum][1]
     layer = relu(layer, alpha=0)
-    layer = utils.dropout(layer, pDropConv)
-    # conv: (32, 32)
-    # pool: (16, 16)
-    lnum += 1
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = relu(layer, alpha=0)
-    layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
-    layer = utils.dropout(layer, pDropConv)
-    # conv: (16, 16)
-    lnum += 1
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = relu(layer, alpha=0)
-    layer = utils.dropout(layer, pDropConv)
-    # conv: (16, 16)
-    # pool: (8, 8)
-    lnum += 1
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = relu(layer, alpha=0)
-    layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
-    layer = utils.dropout(layer, pDropConv)
-    # conv: (8, 8)
-    lnum += 1
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = relu(layer, alpha=0)
-    layer = utils.dropout(layer, pDropConv)
-    # conv: (8, 8)
-    # pool: (4, 4)
-    lnum += 1
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = relu(layer, alpha=0)
-    layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
-    layer = utils.dropout(layer, pDropConv)
-    # 128
-    lnum += 1
-    layer = T.flatten(layer, outdim=2)
-    layer = T.dot(layer, params[lnum][0]) + params[lnum][1]
-    layer = relu(layer, alpha=0)
-    layer = utils.dropout(layer, pDropHidden)
+    layer = utils.dropout(layer, pDropHidden1)
     lnum += 1
     layer = T.dot(layer, params[lnum][0]) + params[lnum][1]
     layer = relu(layer, alpha=0)
-    layer = utils.dropout(layer, pDropHidden)
+    layer = utils.dropout(layer, pDropHidden2)
     lnum += 1
     return softmax(T.dot(layer, params[lnum][0]) + params[lnum][1])  # 如果使用nnet中的softmax训练产生NAN
 
 
-# 卷积网络，输入一组超参数，返回该网络的训练、验证、预测函数
-class CConvNet(object):
-    def __init__(self, fin, f1, f2, f3, f4, f5, f6, h1, h2, outputs,
-                 lr, C, pDropConv=0.2, pDropHidden=0.5):
+class CMLP(object):
+    def __init__(self, fin, h1, h2, outputs,
+                 lr, C, pDropHidden1=0.2, pDropHidden2=0.5):
         # 超参数
         self.lr = lr
         self.C = C
-        self.pDropConv = pDropConv
-        self.pDropHidden = pDropHidden
+        self.pDropHidden1 = pDropHidden1
+        self.pDropHidden2 = pDropHidden2
         # 所有需要优化的参数放入列表中，分别是连接权重和偏置
         self.params = []
-        self.paramsCNN = []
-        self.paramsMLP = []
-        # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
-        self.paramsCNN.append(layerCNNParams((f1, fin, 3, 3)))
-        self.paramsCNN.append(layerCNNParams((f2, f1, 3, 3)))
-        self.paramsCNN.append(layerCNNParams((f3, f2, 3, 3)))
-        self.paramsCNN.append(layerCNNParams((f4, f3, 3, 3)))
-        self.paramsCNN.append(layerCNNParams((f5, f4, 3, 3)))
-        self.paramsCNN.append(layerCNNParams((f6, f5, 3, 3)))
         # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-        self.paramsMLP.append(layerMLPParams((f6 * 4 * 4, h1)))
-        self.paramsMLP.append(layerMLPParams((h1, h2)))
-        self.paramsMLP.append(layerMLPParams((h2, outputs)))
-        self.params = self.paramsCNN + self.paramsMLP
+        self.params.append(layerMLPParams((fin, h1)))
+        self.params.append(layerMLPParams((h1, h2)))
+        self.params.append(layerMLPParams((h2, outputs)))
 
         # 定义 Theano 符号变量，并构建 Theano 表达式
-        self.X = T.tensor4('X')
+        self.X = T.matrix('X')
         self.Y = T.matrix('Y')
         # 训练集代价函数
-        YDropProb = model(self.X, self.params, pDropConv, pDropHidden)
+        YDropProb = model(self.X, self.params, pDropHidden1, pDropHidden2)
         self.trNeqs = utils.neqs(YDropProb, self.Y)
         trCrossEntropy = categorical_crossentropy(YDropProb, self.Y)
         self.trCost = T.mean(trCrossEntropy) + C * utils.reg(flatten(self.params))
@@ -144,16 +78,13 @@ class CConvNet(object):
 
     # 重置优化参数，以重新训练模型
     def resetPrams(self):
-        for p in self.paramsCNN:
-            utils.resetWeightCNN3(p[0])
-            utils.resetBias(p[1])
-        for p in self.paramsMLP:
+        for p in self.params:
             utils.resetWeightMLP3(p[0])
             utils.resetBias(p[1])
 
     # 训练卷积网络，最终返回在测试集上的误差
-    def traincn(self, trX, teX, trY, teY, batchSize=128, maxIter=100, verbose=True,
-                start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=2):
+    def trainmlp(self, trX, teX, trY, teY, batchSize=128, maxIter=100, verbose=True,
+                 start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=2):
         lr = self.lr  # 当验证损失不再下降而早停止后，降低学习率继续迭代
         # 训练函数，输入训练集，输出训练损失和误差
         updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
@@ -219,21 +150,21 @@ class CConvNet(object):
 
 def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
-    trX, teX, trY, teY = cifar(onehot=True)
-    f1, f2, f3, f4, f5, f6, h1, h2 = 32, 32, 64, 64, 128, 128, 1024, 1024
+    trX, teX, trY, teY = mnist(onehot=True)
+    h1, h2 = 625, 625
     params = utils.randomSearch(nIter=10)
     cvErrorList = []
     for param, num in zip(params, range(len(params))):
         lr, C = param
         print '*' * 40, num, 'parameters', param, '*' * 40
-        convNet = CConvNet(3, f1, f2, f3, f4, f5, f6, h1, h2, 10, lr, C, 0.2, 0.5)
-        cvError = convNet.cv(trX, trY)
+        mlp = CMLP(28 * 28, h1, h2, 10, lr, C, 0.2, 0.5)
+        cvError = mlp.cv(trX, trY)
         cvErrorList.append(copy(cvError))
     optIndex = np.argmin(cvErrorList, axis=0)
     lr, C = params[optIndex]
     print 'retraining', params[optIndex]
-    convNet = CConvNet(3, f1, f2, f3, f4, f5, f6, h1, h2, 10, lr, C, 0.2, 0.5)
-    convNet.traincn(trX, teX, trY, teY)
+    mlp = CMLP(28 * 28, h1, h2, 10, lr, C, 0.2, 0.5)
+    mlp.trainmlp(trX, teX, trY, teY)
 
 
 if __name__ == '__main__':
