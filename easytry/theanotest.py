@@ -6,7 +6,7 @@ import theano
 import theano.tensor as T
 from theano import function
 import utils
-import os,cPickle
+import os, cPickle
 import pylab
 
 # x=np.ones((10,1,3,3))
@@ -191,3 +191,47 @@ import pylab
 # print x
 # print y
 # print ff(x,y)
+
+# x=np.arange(60).reshape((5,4,3))
+# b=np.arange(3)
+#
+# X=T.tensor3()
+# B=theano.shared(b)
+# z=X+B
+# ff=function([X],z)
+#
+# print ff(x)
+
+# x=np.arange(10).reshape((5,2))
+# y=np.arange(24).reshape((4,2,3))
+# print np.max(np.stack((y,y)),axis=0).shape
+
+# a = np.array(range(1, 9))
+# a.shape = (2, 2, 2)
+# A = np.array(('a', 'b', 'c', 'd'), dtype=object)
+# A.shape = (2, 2)
+# print np.tensordot(a, A, 0)
+
+# x = T.matrix()
+# splits = np.array([2, 2, 2])
+# xsplit = T.split(x, splits, n_splits=3, axis=1)
+# xmax = map(lambda x: T.max(x, axis=1), xsplit)
+# xstack = T.stack(xmax, axis=1)
+# f = function([x], xstack)
+# print f(np.arange(24).reshape((4, 6)))
+
+# x = T.matrix()
+# xx=T.reshape(T.transpose(x),(3,2,4))
+#
+# xmax = T.max(xx, axis=1)
+# xt = T.transpose(xmax)
+# f = function([x], xt)
+# a=np.arange(24).reshape((4, 6))
+# print a,f(a)
+
+# import time
+# a=theano.shared(np.arange(10))
+# tic =time.time()
+# print a.shape.eval(),time.time()-tic
+# tic =time.time()
+# print a.shape,time.time()-tic

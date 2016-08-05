@@ -44,60 +44,50 @@ def layerMLPParams(shape):
 # 每次调用dropout的模式都不同，即在每轮训练中网络结构都不同
 # 本层的每个特征图和上层的所有特征图连接，可以不用去选择一些组合来部分连接
 def model(X, params, pDropConv, pDropHidden):
-    # conv: (32, 32)
-    lnum = 0
+    lnum = 0  # conv: (32, 32)
     layer = conv2d(X, params[lnum][0], border_mode='half') + \
             params[lnum][1].dimshuffle('x', 0, 'x', 'x')
     layer = relu(layer, alpha=0)
     layer = utils.dropout(layer, pDropConv)
-    # conv: (32, 32)
-    # pool: (16, 16)
-    lnum += 1
+    lnum += 1  # conv: (32, 32) pool: (16, 16)
     layer = conv2d(layer, params[lnum][0], border_mode='half') + \
             params[lnum][1].dimshuffle('x', 0, 'x', 'x')
     layer = relu(layer, alpha=0)
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
-    # conv: (16, 16)
-    lnum += 1
+    lnum += 1  # conv: (16, 16)
     layer = conv2d(layer, params[lnum][0], border_mode='half') + \
             params[lnum][1].dimshuffle('x', 0, 'x', 'x')
     layer = relu(layer, alpha=0)
     layer = utils.dropout(layer, pDropConv)
-    # conv: (16, 16)
-    # pool: (8, 8)
-    lnum += 1
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = relu(layer, alpha=0)
-    layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
-    layer = utils.dropout(layer, pDropConv)
-    # conv: (8, 8)
-    lnum += 1
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = relu(layer, alpha=0)
-    layer = utils.dropout(layer, pDropConv)
-    # conv: (8, 8)
-    # pool: (4, 4)
-    lnum += 1
+    lnum += 1  # conv: (16, 16) pool: (8, 8)
     layer = conv2d(layer, params[lnum][0], border_mode='half') + \
             params[lnum][1].dimshuffle('x', 0, 'x', 'x')
     layer = relu(layer, alpha=0)
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
-    # 128
+    lnum += 1  # conv: (8, 8)
+    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
+            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
+    layer = relu(layer, alpha=0)
+    layer = utils.dropout(layer, pDropConv)
+    lnum += 1  # conv: (8, 8) pool: (4, 4)
+    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
+            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
+    layer = relu(layer, alpha=0)
+    layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
+    layer = utils.dropout(layer, pDropConv)
     lnum += 1
     layer = T.flatten(layer, outdim=2)
-    layer = T.dot(layer, params[lnum][0]) + params[lnum][1]
+    layer = T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0)
     layer = relu(layer, alpha=0)
     layer = utils.dropout(layer, pDropHidden)
     lnum += 1
-    layer = T.dot(layer, params[lnum][0]) + params[lnum][1]
+    layer = T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0)
     layer = relu(layer, alpha=0)
     layer = utils.dropout(layer, pDropHidden)
     lnum += 1
-    return softmax(T.dot(layer, params[lnum][0]) + params[lnum][1])  # 如果使用nnet中的softmax训练产生NAN
+    return softmax(T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0))  # 如果使用nnet中的softmax训练产生NAN
 
 
 # 卷积网络，输入一组超参数，返回该网络的训练、验证、预测函数

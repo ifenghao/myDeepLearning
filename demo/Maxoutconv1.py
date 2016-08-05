@@ -1,19 +1,21 @@
 # coding:utf-8
 __author__ = 'zfh'
 '''
-Maxout Network的MLP版本
+Maxout Network的Conv版本
 使用和CNNv4相同的格式
+输出层采用relu全连接层
 '''
 from compiler.ast import flatten
 import time
 from copy import copy
 
 import theano.tensor as T
-from theano.tensor.nnet import categorical_crossentropy, relu
+from theano.tensor.nnet import conv2d, categorical_crossentropy, relu
+from theano.tensor.signal.pool import pool_2d
 from sklearn.cross_validation import KFold
 import numpy as np
 
-from load import mnist
+from load import cifar
 import utils
 
 
@@ -22,15 +24,18 @@ def softmax(X):
     return e_x / e_x.sum(axis=1).dimshuffle(0, 'x')
 
 
-# maxout激活函数，需要在分段的维度（第二个维度）上取最大
-# 输入（样本数，输入特征数）* maxout层（分段数，输入数，输出数）=（样本数，分段数，输出数）
-def maxout(X):
-    return T.max(X, axis=1)
+# maxout激活函数，只需要把本层特征图维度拆分出分段维度，在分段维度上求最大值
+# 输入（样本数，输入特征图，行1，列1）* maxout层（本层特征图*分段数，上层特征图，3，3）=（样本数，本层特征图*分段数，行2，列2）
+# 输出（样本数，本层特征图，行2，列2）
+def maxout(X, featMapShape, featMap, piece):
+    Xr = T.reshape(X, (-1, featMap, piece, featMapShape[0], featMapShape[1]))  # （样本数，本层特征图，分段数，行2，列2）
+    return T.max(Xr, axis=2)  # （样本数，本层特征图，行2，列2）
 
 
-def layerMaxOutParams(shape):
-    w = utils.weightInitMaxout3(shape, 'w')
-    b = utils.biasInit(shape[2], 'b')
+# 将maxout等效为一般的CNN使用同样的参数维度
+def layerCNNParams(shape):
+    w = utils.weightInitCNN3(shape, 'w')
+    b = utils.biasInit(shape[0], 'b')
     return [w, b]
 
 
@@ -40,48 +45,83 @@ def layerMLPParams(shape):
     return [w, b]
 
 
-def model(X, params, pDropHidden1, pDropHidden2):
-    lnum = 0
-    layer = T.dot(X, params[lnum][0]) + params[lnum][1]
-    layer = maxout(layer)
-    layer = utils.dropout(layer, pDropHidden1)
+def model(X, params, featMapShapes, featMaps, pieces, pDropConv, pDropHidden):
+    lnum = 0  # conv: (32, 32) pool: (16, 16)
+    layer = conv2d(X, params[lnum][0], border_mode='half') + \
+            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
+    layer = maxout(layer, featMapShapes[lnum], featMaps[lnum], pieces[lnum])
+    layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
+    layer = utils.dropout(layer, pDropConv)
+    lnum += 1  # conv: (16, 16) pool: (8, 8)
+    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
+            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
+    layer = maxout(layer, featMapShapes[lnum], featMaps[lnum], pieces[lnum])
+    layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
+    layer = utils.dropout(layer, pDropConv)
+    lnum += 1  # conv: (8, 8) pool: (4, 4)
+    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
+            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
+    layer = maxout(layer, featMapShapes[lnum], featMaps[lnum], pieces[lnum])
+    layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
+    layer = utils.dropout(layer, pDropConv)
     lnum += 1
-    layer = T.dot(layer, params[lnum][0]) + params[lnum][1]
-    layer = maxout(layer)
-    layer = utils.dropout(layer, pDropHidden2)
+    layer = T.flatten(layer, outdim=2)
+    layer = T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0)
+    layer = relu(layer, alpha=0)
+    layer = utils.dropout(layer, pDropHidden)
     lnum += 1
-    return softmax(T.dot(layer, params[lnum][0]) + params[lnum][1])  # 如果使用nnet中的softmax训练产生NAN
+    layer = T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0)
+    layer = relu(layer, alpha=0)
+    layer = utils.dropout(layer, pDropHidden)
+    lnum += 1
+    return softmax(T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0))  # 如果使用nnet中的softmax训练产生NAN
 
 
-class CMaxout(object):
-    def __init__(self, fin, h1, hpiece1, h2, hpiece2, outputs,
-                 lr, C, pDropHidden1=0.2, pDropHidden2=0.5):
+class CMaxoutconv(object):
+    def __init__(self, fin, f1, piece1, f2, piece2, f3, piece3, h1, h2, outputs,
+                 lr, C, pDropConv=0.2, pDropHidden=0.5):
         # 超参数
         self.lr = lr
         self.C = C
-        self.pDropHidden1 = pDropHidden1
-        self.pDropHidden2 = pDropHidden2
+        self.pDropConv = pDropConv
+        self.pDropHidden = pDropHidden
         # 所有需要优化的参数放入列表中，分别是连接权重和偏置
         self.params = []
-        self.paramsMaxout = []
+        self.paramsCNN = []
         self.paramsMLP = []
-        # maxout层，指定piece表示分段线性函数的段数，即使用隐隐层的个数，维度为（分段数，输入数，输出数）
-        self.paramsMaxout.append(layerMaxOutParams((hpiece1, fin, h1)))
-        self.paramsMaxout.append(layerMaxOutParams((hpiece2, h1, h2)))
+        featMapShapes = []
+        featMaps = []
+        pieces = []
+        # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
+        self.paramsCNN.append(layerCNNParams((f1 * piece1, fin, 3, 3)))  # conv: (32, 32) pool: (16, 16)
+        featMapShapes.append((32, 32))
+        featMaps.append(f1)
+        pieces.append(piece1)
+        self.paramsCNN.append(layerCNNParams((f2 * piece2, f1, 3, 3)))  # conv: (16, 16) pool: (8, 8)
+        featMapShapes.append((16, 16))
+        featMaps.append(f2)
+        pieces.append(piece2)
+        self.paramsCNN.append(layerCNNParams((f3 * piece3, f2, 3, 3)))  # conv: (8, 8) pool: (4, 4)
+        featMapShapes.append((8, 8))
+        featMaps.append(f3)
+        pieces.append(piece3)
+        # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
+        self.paramsMLP.append(layerMLPParams((f3 * 4 * 4, h1)))
+        self.paramsMLP.append(layerMLPParams((h1, h2)))
         self.paramsMLP.append(layerMLPParams((h2, outputs)))
-        self.params = self.paramsMaxout + self.paramsMLP
+        self.params = self.paramsCNN + self.paramsMLP
 
         # 定义 Theano 符号变量，并构建 Theano 表达式
-        self.X = T.matrix('X')
+        self.X = T.tensor4('X')
         self.Y = T.matrix('Y')
         # 训练集代价函数
-        YDropProb = model(self.X, self.params, pDropHidden1, pDropHidden2)
+        YDropProb = model(self.X, self.params, featMapShapes, featMaps, pieces, pDropConv, pDropHidden)
         self.trNeqs = utils.neqs(YDropProb, self.Y)
         trCrossEntropy = categorical_crossentropy(YDropProb, self.Y)
         self.trCost = T.mean(trCrossEntropy) + C * utils.reg(flatten(self.params))
 
         # 测试验证集代价函数
-        YFullProb = model(self.X, self.params, 0., 0.)
+        YFullProb = model(self.X, self.params, featMapShapes, featMaps, pieces, 0., 0.)
         self.vateNeqs = utils.neqs(YFullProb, self.Y)
         self.YPred = T.argmax(YFullProb, axis=1)
         vateCrossEntropy = categorical_crossentropy(YFullProb, self.Y)
@@ -89,7 +129,7 @@ class CMaxout(object):
 
     # 重置优化参数，以重新训练模型
     def resetPrams(self):
-        for p in self.paramsMaxout:
+        for p in self.paramsCNN:
             utils.resetWeightMaxout3(p[0])
             utils.resetBias(p[1])
         for p in self.paramsMLP:
@@ -164,20 +204,20 @@ class CMaxout(object):
 
 def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
-    trX, teX, trY, teY = mnist(onehot=True)
-    h1, hpiece1, h2, hpiece2 = 625, 5, 625, 5
+    trX, teX, trY, teY = cifar(onehot=True)
+    f1, piece1, f2, piece2, f3, piece3, h1, h2 = 32, 5, 64, 5, 128, 5, 1024, 1024
     params = utils.randomSearch(nIter=10)
     cvErrorList = []
     for param, num in zip(params, range(len(params))):
         lr, C = param
         print '*' * 40, num, 'parameters', param, '*' * 40
-        maxout = CMaxout(28 * 28, h1, hpiece1, h2, hpiece2, 10, lr, C, 0.2, 0.5)
+        maxout = CMaxoutconv(3, f1, piece1, f2, piece2, f3, piece3, h1, h2, 10, lr, C, 0.2, 0.5)
         cvError = maxout.cv(trX, trY)
         cvErrorList.append(copy(cvError))
     optIndex = np.argmin(cvErrorList, axis=0)
     lr, C = params[optIndex]
     print 'retraining', params[optIndex]
-    maxout = CMaxout(28 * 28, h1, hpiece1, h2, hpiece2, 10, lr, C, 0.2, 0.5)
+    maxout = CMaxoutconv(3, f1, piece1, f2, piece2, f3, piece3, h1, h2, 10, lr, C, 0.2, 0.5)
     maxout.trainmaxout(trX, teX, trY, teY)
 
 

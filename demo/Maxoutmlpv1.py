@@ -1,14 +1,16 @@
 # coding:utf-8
 __author__ = 'zfh'
 '''
+Maxout Network的MLP版本
 使用和CNNv4相同的格式
+增加参数维度，利用T.dot在多维张量上计算特性，简化了激活函数的形式
 '''
 from compiler.ast import flatten
 import time
 from copy import copy
 
 import theano.tensor as T
-from theano.tensor.nnet import categorical_crossentropy, relu
+from theano.tensor.nnet import categorical_crossentropy
 from sklearn.cross_validation import KFold
 import numpy as np
 
@@ -16,10 +18,23 @@ from load import mnist
 import utils
 
 
-# dimshuffle维度重排，将max得到的一维向量扩展成二维矩阵，第二维维度为1，也可以用[:,None]
 def softmax(X):
     e_x = T.exp(X - X.max(axis=1).dimshuffle(0, 'x'))
     return e_x / e_x.sum(axis=1).dimshuffle(0, 'x')
+
+
+# maxout激活函数，需要在分段的维度（第二个维度）上取最大
+# 输入（样本数，输入特征数）* maxout层（分段数，输入数，输出数）=（样本数，分段数，输出数）
+# maxout输出（样本数，输出数）
+def maxout(X):
+    return T.max(X, axis=1)
+
+
+# 权重维度为3，偏置维度为2，都增加了分段数作为第一维
+def layerMaxOutParams(shape):
+    w = utils.weightInitMaxout3(shape, 'w')
+    b = utils.biasInit((shape[0], shape[2]), 'b')  # 偏置增加维度
+    return [w, b]
 
 
 def layerMLPParams(shape):
@@ -28,25 +43,21 @@ def layerMLPParams(shape):
     return [w, b]
 
 
-# 模型构建，返回给定样本判定为某类别的概率
-# dimshuffle在偏置插入维度使之与相加矩阵相同（1，本层特征图个数，1，1），插入维度的broadcastable=True
-# 每次调用dropout的模式都不同，即在每轮训练中网络结构都不同
-# 本层的每个特征图和上层的所有特征图连接，可以不用去选择一些组合来部分连接
 def model(X, params, pDropHidden1, pDropHidden2):
     lnum = 0
-    layer = T.dot(X, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0)
-    layer = relu(layer, alpha=0)
+    layer = T.dot(X, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0, 1)
+    layer = maxout(layer)
     layer = utils.dropout(layer, pDropHidden1)
     lnum += 1
-    layer = T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0)
-    layer = relu(layer, alpha=0)
+    layer = T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0, 1)
+    layer = maxout(layer)
     layer = utils.dropout(layer, pDropHidden2)
     lnum += 1
     return softmax(T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0))  # 如果使用nnet中的softmax训练产生NAN
 
 
-class CMLP(object):
-    def __init__(self, fin, h1, h2, outputs,
+class CMaxoutmlp(object):
+    def __init__(self, fin, h1, piece1, h2, piece2, outputs,
                  lr, C, pDropHidden1=0.2, pDropHidden2=0.5):
         # 超参数
         self.lr = lr
@@ -55,10 +66,13 @@ class CMLP(object):
         self.pDropHidden2 = pDropHidden2
         # 所有需要优化的参数放入列表中，分别是连接权重和偏置
         self.params = []
-        # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-        self.params.append(layerMLPParams((fin, h1)))
-        self.params.append(layerMLPParams((h1, h2)))
-        self.params.append(layerMLPParams((h2, outputs)))
+        self.paramsMaxout = []
+        self.paramsMLP = []
+        # maxout层，指定piece表示分段线性函数的段数，即使用隐隐层的个数，维度为（分段数，输入数，输出数）
+        self.paramsMaxout.append(layerMaxOutParams((piece1, fin, h1)))
+        self.paramsMaxout.append(layerMaxOutParams((piece2, h1, h2)))
+        self.paramsMLP.append(layerMLPParams((h2, outputs)))
+        self.params = self.paramsMaxout + self.paramsMLP
 
         # 定义 Theano 符号变量，并构建 Theano 表达式
         self.X = T.matrix('X')
@@ -78,13 +92,16 @@ class CMLP(object):
 
     # 重置优化参数，以重新训练模型
     def resetPrams(self):
-        for p in self.params:
+        for p in self.paramsMaxout:
+            utils.resetWeightMaxout3(p[0])
+            utils.resetBias(p[1])
+        for p in self.paramsMLP:
             utils.resetWeightMLP3(p[0])
             utils.resetBias(p[1])
 
     # 训练卷积网络，最终返回在测试集上的误差
-    def trainmlp(self, trX, teX, trY, teY, batchSize=128, maxIter=100, verbose=True,
-                 start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=2):
+    def trainmaxout(self, trX, teX, trY, teY, batchSize=128, maxIter=100, verbose=True,
+                    start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=2):
         lr = self.lr  # 当验证损失不再下降而早停止后，降低学习率继续迭代
         # 训练函数，输入训练集，输出训练损失和误差
         updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
@@ -151,20 +168,20 @@ class CMLP(object):
 def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
     trX, teX, trY, teY = mnist(onehot=True)
-    h1, h2 = 625, 625
+    h1, hpiece1, h2, hpiece2 = 625, 5, 625, 5
     params = utils.randomSearch(nIter=10)
     cvErrorList = []
     for param, num in zip(params, range(len(params))):
         lr, C = param
         print '*' * 40, num, 'parameters', param, '*' * 40
-        mlp = CMLP(28 * 28, h1, h2, 10, lr, C, 0.2, 0.5)
-        cvError = mlp.cv(trX, trY)
+        maxout = CMaxoutmlp(28 * 28, h1, hpiece1, h2, hpiece2, 10, lr, C, 0.2, 0.5)
+        cvError = maxout.cv(trX, trY)
         cvErrorList.append(copy(cvError))
     optIndex = np.argmin(cvErrorList, axis=0)
     lr, C = params[optIndex]
     print 'retraining', params[optIndex]
-    mlp = CMLP(28 * 28, h1, h2, 10, lr, C, 0.2, 0.5)
-    mlp.trainmlp(trX, teX, trY, teY)
+    maxout = CMaxoutmlp(28 * 28, h1, hpiece1, h2, hpiece2, 10, lr, C, 0.2, 0.5)
+    maxout.trainmaxout(trX, teX, trY, teY)
 
 
 if __name__ == '__main__':
