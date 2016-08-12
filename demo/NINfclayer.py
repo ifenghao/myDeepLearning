@@ -1,8 +1,9 @@
 # coding:utf-8
 __author__ = 'zfh'
 '''
-在NIN的顶层使用全连接层会导致输出结果包含nan
-替换为全局平均池化层就可以正常计算
+在NIN的顶层使用全连接层
+在scan的元操作中包含所有relu激活，而在scan外部仅做组合
+如果在sacn外部使用对所有元素relu激活，会出现结果的nan
 '''
 from compiler.ast import flatten
 import time
@@ -17,17 +18,6 @@ import pylab
 import numpy as np
 from load import cifar
 import utils
-
-
-def detect_nan(i, node, fn):
-    for output in fn.outputs:
-        if (not isinstance(output[0], np.random.RandomState) and
-                np.isnan(output[0]).any()):
-            print('*** NaN detected ***')
-            theano.printing.debugprint(node)
-            print('Inputs : %s' % [input[0] for input in fn.inputs])
-            print('Outputs: %s' % [output[0] for output in fn.outputs])
-            break
 
 
 # dimshuffle维度重排，将max得到的一维向量扩展成二维矩阵，第二维维度为1，也可以用[:,None]
@@ -47,17 +37,19 @@ def softmax(X):
 #             w1ij = w1[i, j, :, :, :].dimshuffle(0, 'x', 1, 2)
 #             w2ij = w2[i, j, :].dimshuffle('x', 0, 'x', 'x')
 #             tmp = conv2d(Xj, w1ij, border_mode='half')
-#             tmp = T.nnet.relu(tmp, alpha=0)
+#             tmp = relu(tmp, alpha=0)
 #             map1.append(conv2d(tmp, w2ij, border_mode='valid'))
-#         map0.append(T.nnet.relu(T.sum(map1, axis=0), alpha=0))
+#         map0.append(relu(T.sum(map1, axis=0), alpha=0))
 #     return T.concatenate(map0, axis=1)
 
 # scan的一次元操作
 def metaOp(i, j, X, w1, w2, b1, b2):
     hiddens = conv2d(X[:, j, :, :, :], w1[i, j, :, :, :, :], border_mode='half') + b1[i, j, :, :, :, :]
-    hiddens = T.nnet.relu(hiddens, alpha=0)
-    return conv2d(hiddens, w2[i, j, :, :, :, :], border_mode='valid') + b2[i, j, :, :, :, :]
-
+    hiddens = relu(hiddens, alpha=0)
+    # 在元操作中就需要包含relu激活
+    # return conv2d(hiddens, w2[i, j, :, :, :, :], border_mode='valid') + b2[i, j, :, :, :, :]
+    outputs = conv2d(hiddens, w2[i, j, :, :, :, :], border_mode='valid') + b2[i, j, :, :, :, :]
+    return T.nnet.relu(outputs)
 
 def nin(X, param):
     w1, w2, b1, b2 = param
@@ -76,16 +68,15 @@ def nin(X, param):
                             non_sequences=[X, w1, w2, b1, b2],
                             strict=True)
     metaShape = results.shape[-4], results.shape[-2], results.shape[-1]
-    results = results.reshape((w1.shape[0], w2.shape[1]) + metaShape)
-    sumed = T.sum(results, axis=1)
+    reshaped = results.reshape((w1.shape[0], w2.shape[1]) + metaShape)
+    sumed = T.sum(reshaped, axis=1)
     permuted = T.transpose(sumed, axes=(1, 0, 2, 3))
-    return T.nnet.relu(permuted, alpha=0)
+    # 在scan外部不能对全体元素relu激活
+    # return relu(permuted, alpha=0)
+    return permuted
 
 
 # 模型构建，返回给定样本判定为某类别的概率
-# dimshuffle在偏置插入维度使之与相加矩阵相同（1，本层特征图个数，1，1），插入维度的broadcastable=True
-# 每次调用dropout的模式都不同，即在每轮训练中网络结构都不同
-# 本层的每个特征图和上层的所有特征图连接，可以不用去选择一些组合来部分连接
 def model(X, params, pDropConv, pDropHidden):
     lnum = 0  # conv: (32, 32) pool: (16, 16)
     layer = nin(X, params[lnum])
@@ -93,16 +84,10 @@ def model(X, params, pDropConv, pDropHidden):
     layer = utils.dropout(layer, pDropConv)
     lnum += 1  # conv: (16, 16) pool: (8, 8)
     layer = nin(layer, params[lnum])
-    '''
-    layer = relu(layer, alpha=0)
-    '''
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
     lnum += 1  # conv: (8, 8) pool: (4, 4)
     layer = nin(layer, params[lnum])
-    '''
-    layer = relu(layer, alpha=0)
-    '''
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
     lnum += 1

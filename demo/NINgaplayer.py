@@ -1,8 +1,9 @@
 # coding:utf-8
 __author__ = 'zfh'
 '''
-在NIN的顶层使用全连接层会导致输出结果包含nan
-替换为全局平均池化层就可以正常计算
+在NIN的顶层使用全连接层替换为全局平均池化层
+在scan的元操作中包含所有relu激活，而在scan外部仅做组合
+如果在sacn外部使用对所有元素relu激活，会出现结果的nan
 '''
 from compiler.ast import flatten
 import time
@@ -82,9 +83,6 @@ def gap(X, param):
 
 
 # 模型构建，返回给定样本判定为某类别的概率
-# dimshuffle在偏置插入维度使之与相加矩阵相同（1，本层特征图个数，1，1），插入维度的broadcastable=True
-# 每次调用dropout的模式都不同，即在每轮训练中网络结构都不同
-# 本层的每个特征图和上层的所有特征图连接，可以不用去选择一些组合来部分连接
 def model(X, params, pDropConv, pDropHidden):
     lnum = 0  # conv: (32, 32) pool: (16, 16)
     layer = nin(X, params[lnum])
