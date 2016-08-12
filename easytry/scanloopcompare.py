@@ -8,25 +8,7 @@ import os, cPickle
 import pylab
 import time
 import load
-from theano.compile.nanguardmode import NanGuardMode
 
-
-# def detect_nan(i, node, fn):
-#     for output in fn.outputs:
-#         if (not isinstance(output[0], np.random.RandomState) and
-#                 np.isnan(output[0]).any()):
-#             print('*** NaN detected ***')
-#             theano.printing.debugprint(node)
-#             print('Inputs : %s' % [input[0] for input in fn.inputs])
-#             print('Outputs: %s' % [output[0] for output in fn.outputs])
-#             break
-#
-#
-# x = theano.tensor.dscalar('x')
-# f = theano.function([x], [theano.tensor.log(x) * x],
-#                     mode=theano.compile.MonitorMode(
-#                         post_func=detect_nan))
-# f(0)  # log(0) * 0 = -inf * 0 = NaN
 
 def softmax(X):
     e_x = T.exp(X - X.max(axis=1).dimshuffle(0, 'x'))
