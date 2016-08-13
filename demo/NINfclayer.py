@@ -44,33 +44,36 @@ def softmax(X):
 
 # scan的一次元操作
 def metaOp(i, j, X, w1, w2, b1, b2):
+    # (n,1,r,c)**(16,1,3,3)=(n,16,r,c)
     hiddens = conv2d(X[:, j, :, :, :], w1[i, j, :, :, :, :], border_mode='half') + b1[i, j, :, :, :, :]
     hiddens = relu(hiddens, alpha=0)
     # 在元操作中就需要包含relu激活
     # return conv2d(hiddens, w2[i, j, :, :, :, :], border_mode='valid') + b2[i, j, :, :, :, :]
+    # (n,16,r,c)**(1,16,1,1)=(n,1,r,c)
     outputs = conv2d(hiddens, w2[i, j, :, :, :, :], border_mode='valid') + b2[i, j, :, :, :, :]
     return T.nnet.relu(outputs)
 
+
 def nin(X, param):
     w1, w2, b1, b2 = param
-    X = X.dimshuffle(0, 1, 'x', 2, 3)
-    w1 = w1.dimshuffle(0, 1, 2, 'x', 3, 4)
-    w2 = w2.dimshuffle(0, 1, 'x', 2, 'x', 'x')
-    b1 = b1.dimshuffle(0, 1, 'x', 2, 'x', 'x')
-    b2 = b2.dimshuffle(0, 1, 'x', 2, 'x', 'x')
-    indexi = T.arange(w1.shape[0], dtype='int32')
+    X = X.dimshuffle(0, 1, 'x', 2, 3)  # (n,32,1,r,c)
+    w1 = w1.dimshuffle(0, 1, 2, 'x', 3, 4)  # (64,32,16,1,3,3)
+    w2 = w2.dimshuffle(0, 1, 'x', 2, 'x', 'x')  # (64,32,1,16,1,1)
+    b1 = b1.dimshuffle(0, 1, 'x', 2, 'x', 'x')  # (64,32,1,16,1,1)
+    b2 = b2.dimshuffle(0, 1, 'x', 2, 'x', 'x')  # (64,32,1,1,1,1)
+    indexi = T.arange(w1.shape[0], dtype='int32')  # (0:64)
     indexi = T.repeat(indexi, w1.shape[1], axis=0)
-    indexj = T.arange(w1.shape[1], dtype='int32')
+    indexj = T.arange(w1.shape[1], dtype='int32')  # (0:32)
     indexj = T.tile(indexj, w1.shape[0])
     results, updates = scan(fn=metaOp,
                             sequences=[indexi, indexj],
                             outputs_info=None,
                             non_sequences=[X, w1, w2, b1, b2],
-                            strict=True)
+                            strict=True)  # (64*32,n,1,r,c)
     metaShape = results.shape[-4], results.shape[-2], results.shape[-1]
-    reshaped = results.reshape((w1.shape[0], w2.shape[1]) + metaShape)
-    sumed = T.sum(reshaped, axis=1)
-    permuted = T.transpose(sumed, axes=(1, 0, 2, 3))
+    reshaped = results.reshape((w1.shape[0], w1.shape[1]) + metaShape)  # (64,32,n,r,c)
+    sumed = T.sum(reshaped, axis=1)  # (64,n,r,c)
+    permuted = T.transpose(sumed, axes=(1, 0, 2, 3))  # (n,64,r,c)
     # 在scan外部不能对全体元素relu激活
     # return relu(permuted, alpha=0)
     return permuted

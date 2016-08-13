@@ -27,21 +27,15 @@ def softmax(X):
     return e_x / e_x.sum(axis=1).dimshuffle(0, 'x')
 
 
-# 直接使用python的for循环的表示，导致编译失败（递归栈溢出）
 # def nin(X, param, shape):
-#     w1, w2 = param
-#     map0 = []
-#     for i in xrange(shape[0]):
-#         map1 = []
-#         for j in xrange(shape[1]):
-#             Xj = X[:, j, :, :].dimshuffle(0, 'x', 1, 2)
-#             w1ij = w1[i, j, :, :, :].dimshuffle(0, 'x', 1, 2)
-#             w2ij = w2[i, j, :].dimshuffle('x', 0, 'x', 'x')
-#             tmp = conv2d(Xj, w1ij, border_mode='half')
-#             tmp = T.nnet.relu(tmp, alpha=0)
-#             map1.append(conv2d(tmp, w2ij, border_mode='valid'))
-#         map0.append(T.nnet.relu(T.sum(map1, axis=0), alpha=0))
-#     return T.concatenate(map0, axis=1)
+#     for i in xrange(64):
+#         for j in xrange(32):
+#             (n,1,r,c)**(16,1,3,3)=(n,16,r,c)
+#             relu
+#             (n,16,r,c)**(1,16,1,1)=(n,1,r,c)
+#             relu
+#         sum(32*(n,1,r,c), axis=0)
+#     return concatenate(64*(n,1,r,c), axis=1)
 
 # scan的一次元操作
 def metaOp(i, j, X, w1, w2, b1, b2):
@@ -68,7 +62,7 @@ def nin(X, param):
                             non_sequences=[X, w1, w2, b1, b2],
                             strict=True)
     metaShape = results.shape[-4], results.shape[-2], results.shape[-1]
-    reshaped = results.reshape((w1.shape[0], w2.shape[1]) + metaShape)
+    reshaped = results.reshape((w1.shape[0], w1.shape[1]) + metaShape)
     sumed = T.sum(reshaped, axis=1)
     permuted = T.transpose(sumed, axes=(1, 0, 2, 3))
     return permuted

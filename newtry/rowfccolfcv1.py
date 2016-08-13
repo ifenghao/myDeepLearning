@@ -17,6 +17,19 @@ from load import cifar
 import utils
 
 
+# def nin(X, param, shape):
+#     for i in xrange(64):
+#         for j in xrange(32):
+#             (n,1,r,c)**(16,1,3,3)=(n,16,r,c)
+#             relu
+#             (n,16,r,c)**(1,16,1,1)=(n,1,r,c)
+#             relu
+#         concatenate(32*(n,1,r,c), axis=1)
+#         (n,32,r,c)**(2,32,1,1)=(n,2,r,c)
+#         relu
+#     return concatenate(64*(n,2,r,c), axis=1)
+
+
 # dimshuffle维度重排，将max得到的一维向量扩展成二维矩阵，第二维维度为1，也可以用[:,None]
 def softmax(X):
     e_x = T.exp(X - X.max(axis=1).dimshuffle(0, 'x'))

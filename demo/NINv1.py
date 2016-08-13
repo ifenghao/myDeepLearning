@@ -29,7 +29,7 @@ def metaOp(i, j, X, w1, w2, b1, b2):
     hiddens = conv2d(X[:, j, :, :, :], w1[i, j, :, :, :, :], border_mode='half') + b1[i, j, :, :, :, :]
     hiddens = T.nnet.relu(hiddens, alpha=0)
     outputs = conv2d(hiddens, w2[i, j, :, :, :, :], border_mode='valid') + b2[i, j, :, :, :, :]
-    return T.nnet.relu(outputs)
+    return relu(outputs)
 
 
 def nin(X, param):
@@ -49,7 +49,7 @@ def nin(X, param):
                             non_sequences=[X, w1, w2, b1, b2],
                             strict=True)
     metaShape = results.shape[-4], results.shape[-2], results.shape[-1]
-    reshaped = results.reshape((w1.shape[0], w2.shape[1]) + metaShape)
+    reshaped = results.reshape((w1.shape[0], w1.shape[1]) + metaShape)
     sumed = T.sum(reshaped, axis=1)
     permuted = T.transpose(sumed, axes=(1, 0, 2, 3))
     return permuted
@@ -260,7 +260,7 @@ class CConvNet(object):
 def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
     trX, teX, trY, teY = cifar(onehot=True)
-    f1, nin1, f2, nin2, f3, nin3, h1 = 32, 4, 64, 4, 128, 4, 64
+    f1, nin1, f2, nin2, f3, nin3, h1 = 32, 5, 64, 3, 128, 2, 64
     params = utils.randomSearch(nIter=10)
     cvErrorList = []
     for param, num in zip(params, range(len(params))):

@@ -211,6 +211,12 @@ def weightInitNIN2_3(shape, name=None):
     return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
 
 
+def weightInitColfc(shape, name=None):
+    fanIn = shape[-1]
+    bound = np.sqrt(2. / fanIn)
+    return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
+
+
 '''
 参数重置，方法和初始化配套
 '''
