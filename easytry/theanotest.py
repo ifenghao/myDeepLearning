@@ -8,6 +8,7 @@ from theano import function
 import utils
 import os, cPickle
 import pylab
+import time
 
 # x=np.ones((10,1,3,3))
 # y=np.ones((10,1,1,1))*2
@@ -206,12 +207,6 @@ import pylab
 # y=np.arange(24).reshape((4,2,3))
 # print np.max(np.stack((y,y)),axis=0).shape
 
-# a = np.array(range(1, 9))
-# a.shape = (2, 2, 2)
-# A = np.array(('a', 'b', 'c', 'd'), dtype=object)
-# A.shape = (2, 2)
-# print np.tensordot(a, A, 0)
-
 # x = T.matrix()
 # splits = np.array([2, 2, 2])
 # xsplit = T.split(x, splits, n_splits=3, axis=1)
@@ -229,9 +224,64 @@ import pylab
 # a=np.arange(24).reshape((4, 6))
 # print a,f(a)
 
-# import time
-# a=theano.shared(np.arange(10))
-# tic =time.time()
-# print a.shape.eval(),time.time()-tic
-# tic =time.time()
-# print a.shape,time.time()-tic
+# x=np.arange(120).reshape((2,3,4,5))
+# y=np.arange(36).reshape((3,4,3))
+# print x,y
+# print np.tensordot(x,y,[[1,2],[0,1]]).shape
+
+# x = T.tensor4()
+# y = T.tensor4()
+# xstack = T.concatenate((x,y),axis=0)
+# f = function([x,y], xstack)
+# a=np.arange(36).reshape((1,2,3, 6))
+# print f(a,a).shape
+
+# a=np.arange(120).reshape(2,3,4,5)
+# b=np.arange(120,240).reshape(2,3,4,5)
+# print a,b,np.sum(a,axis=0)
+
+# x = T.tensor4()
+# result=[]
+# span=T.arange(x.shape[0])
+# splits=T.ones_like(span,dtype='int')
+# for i in T.split(span,splits,6):
+#     result.append(x[i])
+# f = function([x], result)
+# a=np.arange(36).reshape((6,1,3, 2))
+# print f(a)
+
+# coefficients = T.vector("coefficients")
+# x = T.scalar("x")
+# indices=T.arange(coefficients.shape[0])
+# components, updates = theano.scan(fn=lambda index, power,coefficients, x: coefficients[index] * (x ** power),
+#                                   outputs_info=None,
+#                                   sequences=[indices, T.arange(1000)],
+#                                   non_sequences=[coefficients,x])
+# print components
+# polynomial = components
+# calculate_polynomial = theano.function(inputs=[coefficients, x], outputs=polynomial)
+# print calculate_polynomial([1,0,2],3)
+
+# x = T.tensor4()
+# index0=T.arange(x.shape[0])
+# index0=T.repeat(index0,x.shape[1],axis=0)
+# index1=T.arange(x.shape[1])
+# index1=T.tile(index1,x.shape[0])
+# result, updates = theano.scan(fn=lambda index0,index1, x:x[index0,index1],
+#                                   outputs_info=None,
+#                                   sequences=[index0,index1],
+#                                   non_sequences=[x])
+# f = theano.function(inputs=[x], outputs=result)
+# print f(np.arange(240).reshape(10,4,2,3)).shape# scan返回按照第一维度拼接
+
+# x = T.tensor4()
+# span=T.arange(x.shape[0])
+# xindex = x[2]
+# f = function([x], xindex)
+# a=np.arange(36).reshape((6,1,2,3))
+# print f(a).shape
+
+# a=np.arange(120).reshape((2,3,4,5))
+# print np.transpose(a,axes=(1,0,2,3))
+# a=a.reshape(2,3,1,4,5)
+# print np.concatenate(list(a),axis=1)

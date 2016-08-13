@@ -48,6 +48,90 @@ def makeFunc(inList, outList, updates):
     )
 
 
+def convOutputShape(inputShape, filterShape, border_mode, stride):
+    mapRow, mapCol = inputShape
+    filterRow, filterCol = filterShape
+    rowStride, colStride = stride
+    if border_mode == 'half':
+        mapRow += 2 * (filterRow // 2)
+        mapCol += 2 * (filterCol // 2)
+    elif border_mode == 'full':
+        mapRow += 2 * (filterRow - 1)
+        mapCol += 2 * (filterCol - 1)
+    outRow, outCol = (mapRow - filterRow) // rowStride + 1, (mapCol - filterCol) // colStride + 1
+    return outRow, outCol
+
+
+def poolOutputShape(inputShape, poolSize, ignore_border=False, stride=None):
+    if stride is None:
+        stride = poolSize
+    mapRow, mapCol = inputShape
+    poolRow, poolCol = poolSize
+    rowStride, colStride = stride
+    outRow, outCol = (mapRow - poolRow) // rowStride + 1, (mapCol - poolCol) // colStride + 1
+    if not ignore_border:
+        if (mapRow - poolRow) % rowStride:
+            outRow += 1
+        if (mapCol - poolCol) % colStride:
+            outCol += 1
+    return outRow, outCol
+
+
+# pad的顺序依次：上下左右
+def pad2d(X, padding=(0, 0, 0, 0)):
+    inputShape = X.shape
+    outputShape = (inputShape[0],
+                   inputShape[1],
+                   inputShape[2] + padding[0] + padding[1],
+                   inputShape[3] + padding[2] + padding[3])
+    output = T.zeros(outputShape)
+    indices = (slice(None),
+               slice(None),
+               slice(padding[0], inputShape[2] + padding[0]),  # 上下
+               slice(padding[2], inputShape[3] + padding[2]))  # 左右
+    return T.set_subtensor(output[indices], X)
+
+
+def genIndex(XShape, filterShape, border_mode='valid', stride=(1, 1)):
+    nSample, nMap, mapRow, mapCol = XShape
+    _, _, filterRow, filterCol = filterShape
+    rowStride, colStride = stride
+    outRow, outCol = convOutputShape((mapRow, mapCol), (filterRow, filterCol), border_mode, stride)
+    block1 = np.arange(filterCol, dtype='int')
+    block2 = []
+    for i in xrange(filterRow):
+        block2.append(block1 + i * mapCol)
+    block2 = np.hstack(block2)
+    block3 = []
+    for i in xrange(outCol):
+        block3.append(block2 + i * colStride)
+    block3 = np.hstack(block3)
+    block4 = []
+    for i in xrange(outRow):
+        block4.append(block3 + i * mapCol * rowStride)
+    block4 = np.hstack(block4)
+    out = []
+    for i in xrange(nSample * nMap):
+        out.append(block4 + i * mapRow * mapCol)
+    return np.hstack(out).astype('int')
+
+
+def convdot2d(X, f, index, border_mode='valid', stride=(1, 1), filter_flip=True):
+    nSample, nMap, mapRow, mapCol = X.shape
+    _, _, filterRow, filterCol = f.shape
+    outRow, outCol = convOutputShape((mapRow, mapCol), (filterRow, filterCol), border_mode, stride)
+    if border_mode == 'half':
+        X = pad2d(X, (filterRow // 2, filterRow // 2, filterCol // 2, filterCol // 2))
+    elif border_mode == 'full':
+        X = pad2d(X, (filterRow - 1, filterRow - 1, filterCol - 1, filterCol - 1))
+    X = T.flatten(X, outdim=1)
+    X = X[index].reshape((nSample, nMap, outRow, outCol, filterRow, filterCol))
+    if filter_flip:
+        f = f[:, :, ::-1, ::-1]
+    out = T.tensordot(X, f, axes=[[1, X.ndim - 2, X.ndim - 1], [1, f.ndim - 2, f.ndim - 1]])
+    return out.dimshuffle(0, 3, 1, 2)
+
+
 '''
 图像预处理，只进行零均值化和归一化，在训练集上计算RGB三个通道每个位置的均值，分别在训练、验证、测试集上减去
 不用归一化有时候会出现nan，即计算的数值太大
@@ -66,30 +150,30 @@ def preprocess(trX, vateX):
 '''
 
 
-def weightInit(shape, name):
+def weightInit(shape, name=None):
     return shared(floatX(rng.randn(*shape) * 0.1), name=name, borrow=True)
 
 
-def biasInit(shape, name):
+def biasInit(shape, name=None):
     return shared(floatX(np.zeros(shape)), name=name, borrow=True)
 
 
 # 第二种参数初始化方法仅适用于零均值的输入情况，否则梯度下降很慢
-def weightInitCNN2(shape, name):
+def weightInitCNN2(shape, name=None):
     fanIn = np.prod(shape[1:])
     fanOut = shape[0] * np.prod(shape[2:])
     bound = np.sqrt(6. / (fanIn + fanOut))
     return shared(floatX(rng.uniform(-bound, bound, shape)), name=name, borrow=True)
 
 
-def weightInitMLP2(shape, name):
+def weightInitMLP2(shape, name=None):
     fanIn = shape[0]
     fanOut = shape[1]
     bound = np.sqrt(6. / (fanIn + fanOut))
     return shared(floatX(rng.uniform(-bound, bound, shape)), name=name, borrow=True)
 
 
-def weightInitMaxout2(shape, name):
+def weightInitMaxout2(shape, name=None):
     fanIn = shape[1]
     fanOut = shape[2]
     bound = np.sqrt(6. / (fanIn + fanOut))
@@ -97,20 +181,32 @@ def weightInitMaxout2(shape, name):
 
 
 # 第三种参数初始化方法仅适用于零均值的输入，且使用ReLU神经元的情况
-def weightInitCNN3(shape, name):
+def weightInitCNN3(shape, name=None):
     fanIn = np.prod(shape[1:])
     bound = np.sqrt(2. / fanIn)
     return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
 
 
-def weightInitMLP3(shape, name):
+def weightInitMLP3(shape, name=None):
     fanIn = shape[0]
     bound = np.sqrt(2. / fanIn)
     return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
 
 
-def weightInitMaxout3(shape, name):
+def weightInitMaxout3(shape, name=None):
     fanIn = shape[1]
+    bound = np.sqrt(2. / fanIn)
+    return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
+
+
+def weightInitNIN1_3(shape, name=None):
+    fanIn = shape[1] * np.prod(shape[3:])
+    bound = np.sqrt(2. / fanIn)
+    return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
+
+
+def weightInitNIN2_3(shape, name=None):
+    fanIn = np.prod(shape[1:])
     bound = np.sqrt(2. / fanIn)
     return shared(floatX(rng.randn(*shape) * bound), name=name, borrow=True)
 
@@ -223,6 +319,7 @@ def sgd(cost, params, lr=0.01):
     return updates
 
 
+# 下降速度较快，但是学习率较大会发散
 def sgdm(cost, params, lr=0.01, momentum=0.9, nesterov=False):
     grads = T.grad(cost, params)
     updates = []
@@ -233,6 +330,17 @@ def sgdm(cost, params, lr=0.01, momentum=0.9, nesterov=False):
             updates.append([p, p + momentum * v - lr * g])
         else:
             updates.append([p, p + v])
+    return updates
+
+
+# 较不容易发散，但是下降速度很慢
+def sgdma(cost, params, lr=0.01, momentum=0.9):
+    grads = T.grad(cost, params)
+    updates = []
+    for p, g in zip(params, grads):
+        v = shared(p.get_value() * 0., borrow=True)
+        updates.append([v, momentum * v + (1. - momentum) * g])
+        updates.append([p, p - lr * v])
     return updates
 
 

@@ -1,84 +1,130 @@
 # coding:utf-8
 __author__ = 'zfh'
 '''
-Maxout Network的Conv版本
-使用和CNNv4相同的格式
-输出层采用relu全连接层
+32滤波器产生32*16个特征图，32*16个展开全连接产生下一层的2个特征图
+顶层使用全局平均池化层
 '''
 from compiler.ast import flatten
 import time
-from copy import copy
-
 import theano.tensor as T
+from theano import scan
 from theano.tensor.nnet import conv2d, categorical_crossentropy, relu
 from theano.tensor.signal.pool import pool_2d
 from sklearn.cross_validation import KFold
+from copy import copy
 import numpy as np
-
 from load import cifar
 import utils
 
 
+# dimshuffle维度重排，将max得到的一维向量扩展成二维矩阵，第二维维度为1，也可以用[:,None]
 def softmax(X):
     e_x = T.exp(X - X.max(axis=1).dimshuffle(0, 'x'))
     return e_x / e_x.sum(axis=1).dimshuffle(0, 'x')
 
 
-# maxout激活函数，只需要把本层特征图维度拆分出分段维度，在分段维度上求最大值
-# 输入（样本数，输入特征图，行1，列1）* maxout层（本层特征图*分段数，上层特征图，3，3）=（样本数，本层特征图*分段数，行2，列2）
-# 输出（样本数，本层特征图，行2，列2）
-def maxout(X, featMap, piece):
-    Xr = T.reshape(X, (-1, featMap, piece, X.shape[-2], X.shape[-1]))  # （样本数，本层特征图，分段数，行2，列2）
-    return T.max(Xr, axis=2)  # （样本数，本层特征图，行2，列2）
+# scan的一次元操作
+def metaOp1(i, j, X, w1, b1):
+    # (n,1,r,c)**(16,1,3,3)=(n,16,r,c)
+    hiddens = conv2d(X[:, j, :, :, :], w1[i, j, :, :, :, :], border_mode='half') + b1[i, j, :, :, :, :]
+    hiddens = T.nnet.relu(hiddens, alpha=0)
+    return hiddens
 
 
-# 将maxout等效为一般的CNN使用同样的参数维度
-def layerCNNParams(shape):
+def metaOp2(i, X, w2, b2):
+    # (n,32,r,c)**(2,32,1,1)=(n,2,r,c)
+    hiddens = conv2d(X[i, :, :, :, :], w2[i, :, :, :, :], border_mode='valid') + b2[i, :, :, :, :]
+    hiddens = T.nnet.relu(hiddens, alpha=0)
+    return hiddens
+
+
+def nin(X, param):
+    w1, w2, b1, b2 = param
+    X = X.dimshuffle(0, 1, 'x', 2, 3)  # (n,32,1,r,c)
+    w1 = w1.dimshuffle(0, 1, 2, 'x', 3, 4)  # (64,32,16,1,3,3)
+    w2 = w2.dimshuffle(0, 1, 2, 'x', 'x')  # (64,2,32*16,1,1)
+    b1 = b1.dimshuffle(0, 1, 'x', 2, 'x', 'x')  # (64,32,1,16,1,1)
+    b2 = b2.dimshuffle(0, 'x', 1, 'x', 'x')  # (64,1,2,1,1)
+    indexi = T.arange(w1.shape[0], dtype='int32')  # (0:64)
+    indexi = T.repeat(indexi, w1.shape[1], axis=0)
+    indexj = T.arange(w1.shape[1], dtype='int32')  # (0:64)
+    indexj = T.tile(indexj, w1.shape[0])
+    results, updates = scan(fn=metaOp1,
+                            sequences=[indexi, indexj],
+                            outputs_info=None,
+                            non_sequences=[X, w1, b1],
+                            strict=True)  # (64*32,n,16,r,c)
+    metaShape1 = results.shape[-4], results.shape[-3], results.shape[-2], results.shape[-1]
+    reshaped1 = results.reshape((w1.shape[0], w1.shape[1]) + metaShape1)  # (64,32,n,16,r,c)
+    permuted1 = T.transpose(reshaped1, axes=(0, 2, 1, 3, 4, 5))  # (64,n,32,16,r,c)
+    metaShape2 = permuted1.shape[-2], permuted1.shape[-1]
+    reshaped2 = permuted1.reshape((permuted1.shape[0], permuted1.shape[1], -1) + metaShape2)  # (64,n,32*16,r,c)
+    indexi = T.arange(w1.shape[0], dtype='int32')  # (0:64)
+    results, updates = scan(fn=metaOp2,
+                            sequences=[indexi],
+                            outputs_info=None,
+                            non_sequences=[reshaped2, w2, b2],
+                            strict=True)  # (64,n,2,r,c)
+    permuted3 = T.transpose(results, axes=(1, 0, 2, 3, 4))  # (n,64,2,r,c)
+    metaShape3 = permuted3.shape[-2], permuted3.shape[-1]
+    reshaped3 = permuted3.reshape((permuted3.shape[0], -1) + metaShape3)  # (n,128,r,c)
+    return reshaped3
+
+
+def gap(X):
+    layer = T.mean(X, axis=(2, 3))
+    return layer
+
+
+def conv1t1(X, param):
+    wconv, bconv = param
+    layer = conv2d(X, wconv, border_mode='valid') + bconv.dimshuffle('x', 0, 'x', 'x')
+    layer = relu(layer, alpha=0)
+    return layer
+
+
+def layerNINParams(shape, expand):
+    w1 = utils.weightInitNIN1_3(shape, 'w1')
+    w2 = utils.weightInitColfc((shape[0], expand, shape[1] * shape[2]), 'w2')
+    b1 = utils.biasInit(shape[:3], 'b1')
+    b2 = utils.biasInit((shape[0], expand), 'b2')
+    return [w1, w2, b1, b2]
+
+
+# 全局平均池化使用和卷积层一样的参数
+def layerConvParams(shape):
     w = utils.weightInitCNN3(shape, 'w')
     b = utils.biasInit(shape[0], 'b')
     return [w, b]
 
 
-def layerMLPParams(shape):
-    w = utils.weightInitMLP3(shape, 'w')
-    b = utils.biasInit(shape[1], 'b')
-    return [w, b]
-
-
-def model(X, params, featMaps, pieces, pDropConv, pDropHidden):
+# 模型构建，返回给定样本判定为某类别的概率
+def model(X, params, pDropConv, pDropHidden):
     lnum = 0  # conv: (32, 32) pool: (16, 16)
-    layer = conv2d(X, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = maxout(layer, featMaps[lnum], pieces[lnum])
+    layer = nin(X, params[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
     lnum += 1  # conv: (16, 16) pool: (8, 8)
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = maxout(layer, featMaps[lnum], pieces[lnum])
+    layer = nin(layer, params[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
     lnum += 1  # conv: (8, 8) pool: (4, 4)
-    layer = conv2d(layer, params[lnum][0], border_mode='half') + \
-            params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = maxout(layer, featMaps[lnum], pieces[lnum])
+    layer = nin(layer, params[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
+    # 全局平均池化
     lnum += 1
-    layer = T.flatten(layer, outdim=2)
-    layer = T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0)
-    layer = relu(layer, alpha=0)
+    layer = conv1t1(layer, params[lnum])
     layer = utils.dropout(layer, pDropHidden)
     lnum += 1
-    layer = T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0)
-    layer = relu(layer, alpha=0)
-    layer = utils.dropout(layer, pDropHidden)
-    lnum += 1
-    return softmax(T.dot(layer, params[lnum][0]) + params[lnum][1].dimshuffle('x', 0))  # 如果使用nnet中的softmax训练产生NAN
+    layer = conv1t1(layer, params[lnum])
+    layer = gap(layer)
+    return softmax(layer)  # 如果使用nnet中的softmax训练产生NAN
 
 
-class CMaxoutconv(object):
-    def __init__(self, fin, f1, piece1, f2, piece2, f3, piece3, h1, h2, outputs,
+# 卷积网络，输入一组超参数，返回该网络的训练、验证、预测函数
+class CConvNet(object):
+    def __init__(self, fin, f1, nin1, f2, nin2, f3, nin3, expand, h1, outputs,
                  lr, C, pDropConv=0.2, pDropHidden=0.5):
         # 超参数
         self.lr = lr
@@ -87,37 +133,28 @@ class CMaxoutconv(object):
         self.pDropHidden = pDropHidden
         # 所有需要优化的参数放入列表中，分别是连接权重和偏置
         self.params = []
-        self.paramsCNN = []
-        self.paramsMLP = []
-        featMaps = []
-        pieces = []
+        self.paramsNIN = []
+        self.paramsConv = []
         # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
-        self.paramsCNN.append(layerCNNParams((f1 * piece1, fin, 3, 3)))  # conv: (32, 32) pool: (16, 16)
-        featMaps.append(f1)
-        pieces.append(piece1)
-        self.paramsCNN.append(layerCNNParams((f2 * piece2, f1, 3, 3)))  # conv: (16, 16) pool: (8, 8)
-        featMaps.append(f2)
-        pieces.append(piece2)
-        self.paramsCNN.append(layerCNNParams((f3 * piece3, f2, 3, 3)))  # conv: (8, 8) pool: (4, 4)
-        featMaps.append(f3)
-        pieces.append(piece3)
-        # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-        self.paramsMLP.append(layerMLPParams((f3 * 4 * 4, h1)))
-        self.paramsMLP.append(layerMLPParams((h1, h2)))
-        self.paramsMLP.append(layerMLPParams((h2, outputs)))
-        self.params = self.paramsCNN + self.paramsMLP
+        self.paramsNIN.append(layerNINParams((f1, fin, nin1, 3, 3), expand))
+        self.paramsNIN.append(layerNINParams((f2, f1 * expand, nin2, 3, 3), expand))
+        self.paramsNIN.append(layerNINParams((f3, f2 * expand, nin3, 3, 3), expand))
+        # 全局平均池化层
+        self.paramsConv.append(layerConvParams((h1, f3 * expand, 1, 1)))
+        self.paramsConv.append(layerConvParams((outputs, h1, 1, 1)))
+        self.params = self.paramsNIN + self.paramsConv
 
         # 定义 Theano 符号变量，并构建 Theano 表达式
         self.X = T.tensor4('X')
         self.Y = T.matrix('Y')
         # 训练集代价函数
-        YDropProb = model(self.X, self.params, featMaps, pieces, pDropConv, pDropHidden)
+        YDropProb = model(self.X, self.params, pDropConv, pDropHidden)
         self.trNeqs = utils.neqs(YDropProb, self.Y)
         trCrossEntropy = categorical_crossentropy(YDropProb, self.Y)
         self.trCost = T.mean(trCrossEntropy) + C * utils.reg(flatten(self.params))
 
         # 测试验证集代价函数
-        YFullProb = model(self.X, self.params, featMaps, pieces, 0., 0.)
+        YFullProb = model(self.X, self.params, 0., 0.)
         self.vateNeqs = utils.neqs(YFullProb, self.Y)
         self.YPred = T.argmax(YFullProb, axis=1)
         vateCrossEntropy = categorical_crossentropy(YFullProb, self.Y)
@@ -125,16 +162,16 @@ class CMaxoutconv(object):
 
     # 重置优化参数，以重新训练模型
     def resetPrams(self):
-        for p in self.paramsCNN:
-            utils.resetWeightMaxout3(p[0])
+        for p in self.paramsNIN:
+            utils.resetWeightCNN3(p[0])
             utils.resetBias(p[1])
-        for p in self.paramsMLP:
+        for p in self.paramsConv:
             utils.resetWeightMLP3(p[0])
             utils.resetBias(p[1])
 
     # 训练卷积网络，最终返回在测试集上的误差
-    def trainmaxout(self, trX, teX, trY, teY, batchSize=128, maxIter=100, verbose=True,
-                    start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=2):
+    def traincn(self, trX, teX, trY, teY, batchSize=128, maxIter=100, verbose=True,
+                start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=2):
         lr = self.lr  # 当验证损失不再下降而早停止后，降低学习率继续迭代
         # 训练函数，输入训练集，输出训练损失和误差
         updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
@@ -201,20 +238,20 @@ class CMaxoutconv(object):
 def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
     trX, teX, trY, teY = cifar(onehot=True)
-    f1, piece1, f2, piece2, f3, piece3, h1, h2 = 32, 3, 64, 3, 128, 3, 512, 256
+    f1, nin1, f2, nin2, f3, nin3, expand, h1 = 16, 5, 32, 3, 64, 2, 2, 64
     params = utils.randomSearch(nIter=10)
     cvErrorList = []
     for param, num in zip(params, range(len(params))):
         lr, C = param
         print '*' * 40, num, 'parameters', param, '*' * 40
-        maxout = CMaxoutconv(3, f1, piece1, f2, piece2, f3, piece3, h1, h2, 10, lr, C, 0.2, 0.5)
-        cvError = maxout.cv(trX, trY)
+        convNet = CConvNet(3, f1, nin1, f2, nin2, f3, nin3, expand, h1, 10, lr, C, 0.2, 0.5)
+        cvError = convNet.cv(trX, trY)
         cvErrorList.append(copy(cvError))
     optIndex = np.argmin(cvErrorList, axis=0)
     lr, C = params[optIndex]
     print 'retraining', params[optIndex]
-    maxout = CMaxoutconv(3, f1, piece1, f2, piece2, f3, piece3, h1, h2, 10, lr, C, 0.2, 0.5)
-    maxout.trainmaxout(trX, teX, trY, teY)
+    convNet = CConvNet(3, f1, nin1, f2, nin2, f3, nin3, expand, h1, 10, lr, C, 0.2, 0.5)
+    convNet.traincn(trX, teX, trY, teY)
 
 
 if __name__ == '__main__':

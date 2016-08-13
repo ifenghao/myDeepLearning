@@ -27,8 +27,8 @@ def softmax(X):
 # maxout激活函数，只需要把本层特征图维度拆分出分段维度，在分段维度上求最大值
 # 输入（样本数，输入特征图，行1，列1）* maxout层（本层特征图*分段数，上层特征图，3，3）=（样本数，本层特征图*分段数，行2，列2）
 # 输出（样本数，本层特征图，行2，列2）
-def maxoutconv(X, featMapShape, featMap, piece):
-    Xr = T.reshape(X, (-1, featMap, piece, featMapShape[0], featMapShape[1]))  # （样本数，本层特征图，分段数，行2，列2）
+def maxoutconv(X, featMap, piece):
+    Xr = T.reshape(X, (-1, featMap, piece, X.shape[-2], X.shape[-1]))  # （样本数，本层特征图，分段数，行2，列2）
     return T.max(Xr, axis=2)  # （样本数，本层特征图，行2，列2）
 
 
@@ -55,23 +55,23 @@ def layerMLPParams(shape):
     return [w, b]
 
 
-def model(X, params, featMapShapes, mapunits, pieces, pDropConv, pDropHidden):
+def model(X, params, mapunits, pieces, pDropConv, pDropHidden):
     lnum = 0  # conv: (32, 32) pool: (16, 16)
     layer = conv2d(X, params[lnum][0], border_mode='half') + \
             params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = maxoutconv(layer, featMapShapes[lnum], mapunits[lnum], pieces[lnum])
+    layer = maxoutconv(layer, mapunits[lnum], pieces[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
     lnum += 1  # conv: (16, 16) pool: (8, 8)
     layer = conv2d(layer, params[lnum][0], border_mode='half') + \
             params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = maxoutconv(layer, featMapShapes[lnum], mapunits[lnum], pieces[lnum])
+    layer = maxoutconv(layer, mapunits[lnum], pieces[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
     lnum += 1  # conv: (8, 8) pool: (4, 4)
     layer = conv2d(layer, params[lnum][0], border_mode='half') + \
             params[lnum][1].dimshuffle('x', 0, 'x', 'x')
-    layer = maxoutconv(layer, featMapShapes[lnum], mapunits[lnum], pieces[lnum])
+    layer = maxoutconv(layer, mapunits[lnum], pieces[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
     lnum += 1
@@ -99,20 +99,16 @@ class CMaxoutconv(object):
         self.params = []
         self.paramsCNN = []
         self.paramsMLP = []
-        featMapShapes = []
         mapunits = []
         pieces = []
         # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
         self.paramsCNN.append(layerCNNParams((f1 * piece1, fin, 3, 3)))  # conv: (32, 32) pool: (16, 16)
-        featMapShapes.append((32, 32))
         mapunits.append(f1)
         pieces.append(piece1)
         self.paramsCNN.append(layerCNNParams((f2 * piece2, f1, 3, 3)))  # conv: (16, 16) pool: (8, 8)
-        featMapShapes.append((16, 16))
         mapunits.append(f2)
         pieces.append(piece2)
         self.paramsCNN.append(layerCNNParams((f3 * piece3, f2, 3, 3)))  # conv: (8, 8) pool: (4, 4)
-        featMapShapes.append((8, 8))
         mapunits.append(f3)
         pieces.append(piece3)
         # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
@@ -129,13 +125,13 @@ class CMaxoutconv(object):
         self.X = T.tensor4('X')
         self.Y = T.matrix('Y')
         # 训练集代价函数
-        YDropProb = model(self.X, self.params, featMapShapes, mapunits, pieces, pDropConv, pDropHidden)
+        YDropProb = model(self.X, self.params, mapunits, pieces, pDropConv, pDropHidden)
         self.trNeqs = utils.neqs(YDropProb, self.Y)
         trCrossEntropy = categorical_crossentropy(YDropProb, self.Y)
         self.trCost = T.mean(trCrossEntropy) + C * utils.reg(flatten(self.params))
 
         # 测试验证集代价函数
-        YFullProb = model(self.X, self.params, featMapShapes, mapunits, pieces, 0., 0.)
+        YFullProb = model(self.X, self.params, mapunits, pieces, 0., 0.)
         self.vateNeqs = utils.neqs(YFullProb, self.Y)
         self.YPred = T.argmax(YFullProb, axis=1)
         vateCrossEntropy = categorical_crossentropy(YFullProb, self.Y)
@@ -219,7 +215,7 @@ class CMaxoutconv(object):
 def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
     trX, teX, trY, teY = cifar(onehot=True)
-    f1, piece1, f2, piece2, f3, piece3, h1, pieceh1, h2, pieceh2 = 32, 5, 64, 5, 128, 5, 1024, 5, 1024, 5
+    f1, piece1, f2, piece2, f3, piece3, h1, pieceh1, h2, pieceh2 = 32, 3, 64, 3, 128, 3, 512, 3, 256, 5
     params = utils.randomSearch(nIter=10)
     cvErrorList = []
     for param, num in zip(params, range(len(params))):

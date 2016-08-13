@@ -55,11 +55,15 @@ def nin(X, param):
     return permuted
 
 
-def gap(X, param):
-    wgap, bgap = param
-    layer = conv2d(X, wgap, border_mode='valid') + bgap.dimshuffle('x', 0, 'x', 'x')
+def gap(X):
+    layer = T.mean(X, axis=(2, 3))
+    return layer
+
+
+def conv1t1(X, param):
+    wconv, bconv = param
+    layer = conv2d(X, wconv, border_mode='valid') + bconv.dimshuffle('x', 0, 'x', 'x')
     layer = relu(layer, alpha=0)
-    layer = T.mean(layer, axis=(2, 3))
     return layer
 
 
@@ -70,14 +74,14 @@ def fc(X, param):
     return layer
 
 
-def addNINLayer(inputShape, filterShape, params, border_mode, stride):
+def addNINLayer(inputShape, filterShape, params, border_mode, stride=(1, 1)):
     params.append(layerNINParams(filterShape))
     outputShape = utils.convOutputShape(inputShape[-2:], filterShape[-2:], border_mode, stride)
     return outputShape
 
 
-def addPoolLayer(inputShape, poolSize, border_mode, stride=None):
-    outputShape = utils.poolOutputShape(inputShape, poolSize, border_mode, stride)
+def addPoolLayer(inputShape, poolSize, ignore_border=False, stride=None):
+    outputShape = utils.poolOutputShape(inputShape, poolSize, ignore_border, stride)
     return outputShape
 
 
@@ -90,7 +94,7 @@ def layerNINParams(shape):
 
 
 # 全局平均池化使用和卷积层一样的参数
-def layerGAPParams(shape):
+def layerConvParams(shape):
     w = utils.weightInitCNN3(shape, 'w')
     b = utils.biasInit(shape[0], 'b')
     return [w, b]
@@ -117,18 +121,19 @@ def model(X, params, pDropConv, pDropHidden):
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
     layer = utils.dropout(layer, pDropConv)
     # 全连接层
-    layer = T.flatten(layer, outdim=2)
-    lnum += 1
-    layer = fc(layer, params[lnum])
-    layer = utils.dropout(layer, pDropHidden)
-    lnum += 1
-    layer = fc(layer, params[lnum])
-    # 全局平均池化
+    # layer = T.flatten(layer, outdim=2)
     # lnum += 1
-    # layer = gap(layer, params[lnum])
+    # layer = fc(layer, params[lnum])
     # layer = utils.dropout(layer, pDropHidden)
     # lnum += 1
-    # layer = gap(layer, params[lnum])
+    # layer = fc(layer, params[lnum])
+    # 全局平均池化
+    lnum += 1
+    layer = conv1t1(layer, params[lnum])
+    layer = utils.dropout(layer, pDropHidden)
+    lnum += 1
+    layer = conv1t1(layer, params[lnum])
+    layer = gap(layer)
     return softmax(layer)  # 如果使用nnet中的softmax训练产生NAN
 
 
@@ -144,22 +149,22 @@ class CConvNet(object):
         # 所有需要优化的参数放入列表中，分别是连接权重和偏置
         self.params = []
         self.paramsNIN = []
-        self.paramsFCorGAP = []
+        self.paramsFCorConv = []
         # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
         inputShape = (32, 32)
-        layerShape = addNINLayer(inputShape, (f1, fin, nin1, 3, 3), self.paramsNIN, 'half', (1, 1))
-        layerShape = addPoolLayer(layerShape, (2, 2), 'valid')
-        layerShape = addNINLayer(layerShape, (f2, f1, nin2, 3, 3), self.paramsNIN, 'half', (1, 1))
-        layerShape = addPoolLayer(layerShape, (2, 2), 'valid')
-        layerShape = addNINLayer(layerShape, (f3, f2, nin3, 3, 3), self.paramsNIN, 'half', (1, 1))
-        layerShape = addPoolLayer(layerShape, (2, 2), 'valid')
+        layerShape = addNINLayer(inputShape, (f1, fin, nin1, 3, 3), self.paramsNIN, 'half')
+        layerShape = addPoolLayer(layerShape, (2, 2))
+        layerShape = addNINLayer(layerShape, (f2, f1, nin2, 3, 3), self.paramsNIN, 'half')
+        layerShape = addPoolLayer(layerShape, (2, 2))
+        layerShape = addNINLayer(layerShape, (f3, f2, nin3, 3, 3), self.paramsNIN, 'half')
+        layerShape = addPoolLayer(layerShape, (2, 2))
         # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-        self.paramsFCorGAP.append(layerMLPParams((f3 * np.prod(layerShape), h1)))
-        self.paramsFCorGAP.append(layerMLPParams((h1, outputs)))
+        # self.paramsFCorGAP.append(layerMLPParams((f3 * np.prod(layerShape), h1)))
+        # self.paramsFCorGAP.append(layerMLPParams((h1, outputs)))
         # 全局平均池化层
-        self.paramsFCorGAP.append(layerGAPParams((h1, f3, 1, 1)))
-        self.paramsFCorGAP.append(layerMLPParams((outputs, h1, 1, 1)))
-        self.params = self.paramsNIN + self.paramsFCorGAP
+        self.paramsFCorConv.append(layerConvParams((h1, f3, 1, 1)))
+        self.paramsFCorConv.append(layerConvParams((outputs, h1, 1, 1)))
+        self.params = self.paramsNIN + self.paramsFCorConv
 
         # 定义 Theano 符号变量，并构建 Theano 表达式
         self.X = T.tensor4('X')
@@ -182,7 +187,7 @@ class CConvNet(object):
         for p in self.paramsNIN:
             utils.resetWeightCNN3(p[0])
             utils.resetBias(p[1])
-        for p in self.paramsFCorGAP:
+        for p in self.paramsFCorConv:
             utils.resetWeightMLP3(p[0])
             utils.resetBias(p[1])
 
@@ -255,7 +260,7 @@ class CConvNet(object):
 def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
     trX, teX, trY, teY = cifar(onehot=True)
-    f1, nin1, f2, nin2, f3, nin3, h1 = 32, 4, 64, 4, 128, 4, 256
+    f1, nin1, f2, nin2, f3, nin3, h1 = 32, 4, 64, 4, 128, 4, 64
     params = utils.randomSearch(nIter=10)
     cvErrorList = []
     for param, num in zip(params, range(len(params))):
