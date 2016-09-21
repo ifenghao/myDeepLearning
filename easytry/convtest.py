@@ -1,11 +1,8 @@
+import time
+
 import numpy as np
-import theano
 import theano.tensor as T
 from theano import function
-import utils
-import os, cPickle
-import pylab
-import time
 
 
 # xx=np.random.randn(5000).reshape((100,2,5,5))

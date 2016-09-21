@@ -3,10 +3,6 @@ __author__ = 'zfh'
 import numpy as np
 import theano
 import theano.tensor as T
-import utils
-import os, cPickle
-import pylab
-import time
 
 t = theano.shared(0)
 s = theano.tensor.vector('v')

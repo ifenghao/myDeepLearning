@@ -3,15 +3,15 @@ __author__ = 'zfh'
 
 import time
 
+import matplotlib.pyplot as plt
 import numpy as np
 import theano.tensor as T
 from theano import function
 from theano.tensor.nnet.conv import conv2d
 from theano.tensor.signal.downsample import max_pool_2d
-import matplotlib.pyplot as plt
 
 from load import mnist
-import utils
+from utils import basicUtils, gradient, initial, preprocess
 
 
 def softmax(X):
@@ -50,17 +50,17 @@ teX = teX.reshape(-1, 1, 28, 28)
 X = T.tensor4('X')
 Y = T.matrix('Y')
 # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（1，本层特征图个数，1，1）
-wconv1 = utils.weightInit((32, 1, 3, 3), 'wconv1')
-bconv1 = utils.biasInitCNN2((32,), 'bconv1')
-wconv2 = utils.weightInit((64, 32, 3, 3), 'wconv2')
-bconv2 = utils.biasInitCNN2((64,), 'bconv2')
-wconv3 = utils.weightInit((128, 64, 3, 3), 'wconv3')
-bconv3 = utils.biasInitCNN2((128,), 'bconv3')
+wconv1 = initial.weightInit((32, 1, 3, 3), 'wconv1')
+bconv1 = initial.biasInitCNN2((32,), 'bconv1')
+wconv2 = initial.weightInit((64, 32, 3, 3), 'wconv2')
+bconv2 = initial.biasInitCNN2((64,), 'bconv2')
+wconv3 = initial.weightInit((128, 64, 3, 3), 'wconv3')
+bconv3 = initial.biasInitCNN2((128,), 'bconv3')
 # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-wfull = utils.weightInit((128 * 3 * 3, hiddens), 'wfull')
-bfull = utils.biasInitCNN2((hiddens,), 'bfull')
-wout = utils.weightInit((hiddens, outputs), 'wout')
-bout = utils.biasInitCNN2((outputs,), 'bout')
+wfull = initial.weightInit((128 * 3 * 3, hiddens), 'wfull')
+bfull = initial.biasInitCNN2((hiddens,), 'bfull')
+wout = initial.weightInit((hiddens, outputs), 'wout')
+bout = initial.biasInitCNN2((outputs,), 'bout')
 
 # 构建 Theano 表达式
 yProb = model(X, wconv1, bconv1, wconv2, bconv2, wconv3, bconv3, wfull, bfull, wout, bout)
@@ -74,7 +74,7 @@ cost = T.mean(crossEntropy) + C * (
     T.mean(wout ** 2) + T.mean(bout ** 2)
 )
 gradPrams = [wconv1, bconv1, wconv2, bconv2, wconv3, bconv3, wfull, bfull, wout, bout]  # 所有需要优化的参数放入列表中
-updates = utils.sgdm(cost, gradPrams, learningRate)
+updates = gradient.sgdm(cost, gradPrams, learningRate)
 
 # 编译函数
 train = function(

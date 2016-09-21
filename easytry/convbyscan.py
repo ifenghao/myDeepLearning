@@ -4,7 +4,8 @@ __author__ = 'zfh'
 import numpy as np
 import theano
 import theano.tensor as T
-import utils
+
+from utils import basicUtils, gradient, initial, preprocess
 
 
 # def nin(X, param, shape):
@@ -184,8 +185,8 @@ def conv3(X, w):
 X = T.tensor4('X')
 shape1 = (64, 32, 3, 3)
 shape2 = (128, 64, 3, 3)
-w1 = theano.shared(utils.floatX(np.arange(np.prod(shape1)).reshape(shape1)), borrow=True)
-w2 = theano.shared(utils.floatX(np.arange(np.prod(shape2)).reshape(shape2)), borrow=True)
+w1 = theano.shared(basicUtils.floatX(np.arange(np.prod(shape1)).reshape(shape1)), borrow=True)
+w2 = theano.shared(basicUtils.floatX(np.arange(np.prod(shape2)).reshape(shape2)), borrow=True)
 
 layerc = T.nnet.conv2d(X, w1, border_mode='half')
 layerc = T.nnet.conv2d(layerc, w2, border_mode='half')

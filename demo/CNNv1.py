@@ -8,16 +8,18 @@ __author__ = 'zfh'
 4、使用mini-batch分批训练
 5、使用borrow=True属性
 '''
-from compiler.ast import flatten
 import time
+from compiler.ast import flatten
 from copy import copy
+
+import pylab
 import theano.tensor as T
 from theano import function, In, Out
 from theano.tensor.nnet import conv2d, categorical_crossentropy, relu
 from theano.tensor.signal.pool import pool_2d
-import pylab
+
 from load import cifar
-import utils
+from utils import basicUtils, gradient, initial, preprocess, visualize
 
 
 # dimshuffle维度重排，将max得到的一维向量扩展成二维矩阵，第二维维度为1，也可以用[:,None]
@@ -34,21 +36,21 @@ def model(X, prams, pDropConv, pDropHidden):
     lconv1 = relu(conv2d(X, prams[0][0], border_mode='full') +
                   prams[0][1].dimshuffle('x', 0, 'x', 'x'))
     lds1 = pool_2d(lconv1, (2, 2))
-    lds1 = utils.dropout(lds1, pDropConv)
+    lds1 = basicUtils.dropout(lds1, pDropConv)
 
     lconv2 = relu(conv2d(lds1, prams[1][0]) +
                   prams[1][1].dimshuffle('x', 0, 'x', 'x'))
     lds2 = pool_2d(lconv2, (2, 2))
-    lds2 = utils.dropout(lds2, pDropConv)
+    lds2 = basicUtils.dropout(lds2, pDropConv)
 
     lconv3 = relu(conv2d(lds2, prams[2][0]) +
                   prams[2][1].dimshuffle('x', 0, 'x', 'x'))
     lds3 = pool_2d(lconv3, (2, 2))
-    lds3 = utils.dropout(lds3, pDropConv)
+    lds3 = basicUtils.dropout(lds3, pDropConv)
 
     lflat = T.flatten(lds3, outdim=2)
     lfull = relu(T.dot(lflat, prams[3][0]) + prams[3][1])
-    lfull = utils.dropout(lfull, pDropHidden)
+    lfull = basicUtils.dropout(lfull, pDropHidden)
     return softmax(T.dot(lfull, prams[4][0]) + prams[4][1])  # 如果使用nnet中的softmax训练产生NAN
 
 # 常量
@@ -75,25 +77,25 @@ prams = []  # 所有需要优化的参数放入列表中，分别是连接权重
 # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
 # conv: (32+3-1 , 32+3-1) = (34, 34)
 # pool: (34/2, 34/2) = (17, 17)
-wconv1 = utils.weightInit((f1, fin, 3, 3), 'wconv1')
-bconv1 = utils.biasInitCNN2((f1,), 'bconv1')
+wconv1 = initial.weightInit((f1, fin, 3, 3), 'wconv1')
+bconv1 = initial.biasInitCNN2((f1,), 'bconv1')
 prams.append([wconv1, bconv1])
 # conv: (17-3+1 , 17-3+1) = (15, 15)
 # pool: (15/2, 15/2) = (8, 8)
-wconv2 = utils.weightInit((f2, f1, 3, 3), 'wconv2')
-bconv2 = utils.biasInitCNN2((f2,), 'bconv2')
+wconv2 = initial.weightInit((f2, f1, 3, 3), 'wconv2')
+bconv2 = initial.biasInitCNN2((f2,), 'bconv2')
 prams.append([wconv2, bconv2])
 # conv: (8-3+1 , 8-3+1) = (6, 6)
 # pool: (6/2, 6/2) = (3, 3)
-wconv3 = utils.weightInit((f3, f2, 3, 3), 'wconv3')
-bconv3 = utils.biasInitCNN2((f3,), 'bconv3')
+wconv3 = initial.weightInit((f3, f2, 3, 3), 'wconv3')
+bconv3 = initial.biasInitCNN2((f3,), 'bconv3')
 prams.append([wconv3, bconv3])
 # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-wfull = utils.weightInit2MLP((f3 * 3 * 3, hiddens), 'wfull')
-bfull = utils.biasInitCNN2((hiddens,), 'bfull')
+wfull = initial.weightInit2MLP((f3 * 3 * 3, hiddens), 'wfull')
+bfull = initial.biasInitCNN2((hiddens,), 'bfull')
 prams.append([wfull, bfull])
-wout = utils.weightInit2MLP((hiddens, outputs), 'wout')
-bout = utils.biasInitCNN2((outputs,), 'bout')
+wout = initial.weightInit2MLP((hiddens, outputs), 'wout')
+bout = initial.biasInitCNN2((outputs,), 'bout')
 prams.append([wout, bout])
 
 # 构建 Theano 表达式
@@ -101,15 +103,15 @@ YDropProb = model(X, prams, 0.2, 0.5)
 YFullProb = model(X, prams, 0., 0.)
 YPred = T.argmax(YFullProb, axis=1)
 crossEntropy = categorical_crossentropy(YDropProb, Y)
-cost = T.mean(crossEntropy) + C * utils.reg(flatten(prams))
-updates = utils.rmsprop(cost, flatten(prams), lr=learningRate)
+cost = T.mean(crossEntropy) + C * basicUtils.regularizer(flatten(prams))
+updates = gradient.rmsprop(cost, flatten(prams), lr=learningRate)
 
 # 编译函数
 # 训练函数，输入训练集，输出测试误差
 train = function(
     inputs=[In(X, borrow=True, allow_downcast=True),
             In(Y, borrow=True, allow_downcast=True)],
-    outputs=Out(utils.neqs(YDropProb, Y), borrow=True),  # 减少返回参数节省时间
+    outputs=Out(basicUtils.neqs(YDropProb, Y), borrow=True),  # 减少返回参数节省时间
     updates=updates,
     allow_input_downcast=True
 )
@@ -117,7 +119,7 @@ train = function(
 test = function(
     inputs=[In(X, borrow=True, allow_downcast=True),
             In(Y, borrow=True, allow_downcast=True)],
-    outputs=Out(utils.neqs(YFullProb, Y), borrow=True),  # 减少返回参数节省时间
+    outputs=Out(basicUtils.neqs(YFullProb, Y), borrow=True),  # 减少返回参数节省时间
     allow_input_downcast=True
 )
 # 预测函数，只输入X，输出预测结果
@@ -143,5 +145,5 @@ print 'total time:', time.time() - start
 pylab.plot(errorTrace, 'b-')
 pylab.show()
 
-featureMaps = utils.listFeatureMap(trX[:5], prams)
-utils.showFeatureMap(featureMaps)
+featureMaps = visualize.listFeatureMap(trX[:5], prams)
+visualize.showFeatureMap(featureMaps)

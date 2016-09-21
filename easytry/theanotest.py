@@ -285,3 +285,24 @@ import time
 # print np.transpose(a,axes=(1,0,2,3))
 # a=a.reshape(2,3,1,4,5)
 # print np.concatenate(list(a),axis=1)
+
+# import h5py
+# f=h5py.File('/home/zfh/downloadcode/googlenet/googlenet_weights.h5','r')
+# data=f.get('conv1/7x7_s2/conv1')
+# w,b= data.values()
+# print np.array(w).shape,np.array(b).shape
+
+# from scipy.misc import imread, imresize, imshow
+# img = imread("/home/zfh/persian-cat.jpg", mode='RGB')
+# img = imresize(img, (224, 224))
+# img = np.array(img, dtype=np.float32)
+# img = img[:, :, ::-1]
+# img = img.transpose((2, 0, 1))
+# avg=np.mean(img,axis=(1,2),keepdims=True)
+# img-=avg
+# imshow(img)
+
+from keras.layers import Input, Dense, Convolution2D, BatchNormalization
+from lasagne import layers
+layers.DenseLayer
+layers.Conv2DLayer

@@ -1,13 +1,16 @@
 # coding:utf-8
 __author__ = 'zfh'
 
-import numpy as np
-from numpy import random as rng
-import theano.tensor as T
-from theano import function, shared
-import utils
-import matplotlib.pyplot as plt
 import time
+
+import matplotlib.pyplot as plt
+import numpy as np
+import theano.tensor as T
+from numpy import random as rng
+from theano import function, shared
+
+from utils import basicUtils, gradient, initial, preprocess
+
 
 # 模型构建，返回给定样本判定为某类别的概率
 def model(X, w1, b1, w2, b2):
@@ -26,9 +29,9 @@ hiddens = 100
 # Theano 符号变量
 X = T.matrix('X')
 y = T.vector('y')
-w1 = shared(utils.floatX(np.random.randn(n, hiddens) * 0.01), name='w1', borrow=True)
-b1 = shared(utils.floatX(np.ones((hiddens,))), name='b1', borrow=True)
-w2 = shared(utils.floatX(np.random.randn(hiddens) * 0.01), name='w2', borrow=True)
+w1 = shared(basicUtils.floatX(np.random.randn(n, hiddens) * 0.01), name='w1', borrow=True)
+b1 = shared(basicUtils.floatX(np.ones((hiddens,))), name='b1', borrow=True)
+w2 = shared(basicUtils.floatX(np.random.randn(hiddens) * 0.01), name='w2', borrow=True)
 b2 = shared(1., name='b2', borrow=True)
 
 # 构建 Theano 表达式
@@ -37,7 +40,7 @@ yPred = yProb > 0.5
 crossEntropy = T.nnet.categorical_crossentropy(yProb, y)
 cost = T.mean(crossEntropy) + C * (T.mean(w1 ** 2) + T.mean(b1 ** 2) + T.mean(w2 ** 2) + T.mean(b2 ** 2))
 gradPrams = [w1, b1, w2, b2]  # 所有需要优化的参数放入列表中
-updates = utils.sgd(cost, gradPrams, learningRate)
+updates = gradient.sgd(cost, gradPrams, learningRate)
 
 # 编译函数
 train = function(

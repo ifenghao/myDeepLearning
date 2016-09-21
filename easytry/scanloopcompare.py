@@ -1,13 +1,11 @@
 import numpy as np
 import theano
 import theano.tensor as T
-from theano import function, scan
+from theano import scan
 from theano.tensor.nnet import conv2d, relu, categorical_crossentropy
-import utils
-import os, cPickle
-import pylab
-import time
+
 import load
+from utils import basicUtils, gradient, initial, preprocess
 
 
 def softmax(X):
@@ -71,36 +69,36 @@ X = T.tensor4('X')
 Y = T.matrix('Y')
 shape11 = (4, 3, 5, 3, 3)
 shape12 = (4, 3, 5)
-w11 = theano.shared(utils.floatX(np.arange(np.prod(shape11)).reshape(shape11)), borrow=True)
-w12 = theano.shared(utils.floatX(np.arange(np.prod(shape12)).reshape(shape12)), borrow=True)
+w11 = theano.shared(basicUtils.floatX(np.arange(np.prod(shape11)).reshape(shape11)), borrow=True)
+w12 = theano.shared(basicUtils.floatX(np.arange(np.prod(shape12)).reshape(shape12)), borrow=True)
 # shapegap = (10, 4, 1, 1)
 # wgap = theano.shared(utils.floatX(np.arange(np.prod(shapegap)).reshape(shapegap)), borrow=True)
 
 shape21 = (5, 4, 5, 3, 3)
 shape22 = (5, 4, 5)
-w21 = theano.shared(utils.floatX(np.arange(np.prod(shape21)).reshape(shape21)), borrow=True)
-w22 = theano.shared(utils.floatX(np.arange(np.prod(shape22)).reshape(shape22)), borrow=True)
+w21 = theano.shared(basicUtils.floatX(np.arange(np.prod(shape21)).reshape(shape21)), borrow=True)
+w22 = theano.shared(basicUtils.floatX(np.arange(np.prod(shape22)).reshape(shape22)), borrow=True)
 shapegap = (10, 5, 1, 1)
-wgap = theano.shared(utils.floatX(np.arange(np.prod(shapegap)).reshape(shapegap)), borrow=True)
+wgap = theano.shared(basicUtils.floatX(np.arange(np.prod(shapegap)).reshape(shapegap)), borrow=True)
 
 layer1 = nin1(X, [w11, w12])
 layer1 = nin1(layer1, [w21, w22])
 layer1 = gap(layer1, wgap)
 YDropProb1 = softmax(layer1)
-trNeqs = utils.neqs(YDropProb1, Y)
+trNeqs = basicUtils.neqs(YDropProb1, Y)
 trCrossEntropy = categorical_crossentropy(YDropProb1, Y)
 trCost1 = T.mean(trCrossEntropy)
-updates1 = utils.sgd(trCost1, [w11, w12, wgap], 0.001)
+updates1 = basicUtils.sgd(trCost1, [w11, w12, wgap], 0.001)
 f1 = theano.function([X, Y], trCost1, updates=updates1, allow_input_downcast=True)
 
 layer2 = nin2(X, [w11, w12], shape11)
 layer2 = nin2(layer2, [w21, w22], shape21)
 layer2 = gap(layer2, wgap)
 YDropProb2 = softmax(layer2)
-trNeqs = utils.neqs(YDropProb2, Y)
+trNeqs = basicUtils.neqs(YDropProb2, Y)
 trCrossEntropy = categorical_crossentropy(YDropProb2, Y)
 trCost2 = T.mean(trCrossEntropy)
-updates2 = utils.sgd(trCost2, [w11, w12, wgap], 0.001)
+updates2 = basicUtils.sgd(trCost2, [w11, w12, wgap], 0.001)
 f2 = theano.function([X, Y], trCost2, updates=updates2, allow_input_downcast=True)
 
 x = np.random.randint(0, 100, (500, 3, 10, 10))

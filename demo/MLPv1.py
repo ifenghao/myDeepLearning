@@ -7,17 +7,16 @@ __author__ = 'zfh'
 3、参数更新方式采用rmsprop
 4、使用mini-batch分批训练
 '''
-from compiler.ast import flatten
 import time
+from compiler.ast import flatten
 
+import matplotlib.pyplot as plt
 import numpy as np
 import theano.tensor as T
-
 from theano import function
-import matplotlib.pyplot as plt
 
 from load import mnist
-import utils
+from utils import basicUtils, gradient, initial, preprocess
 
 
 # dimshuffle维度重排，将max得到的一维向量扩展成二维矩阵，第二维维度为1，也可以用[:,None]
@@ -28,9 +27,9 @@ def softmax(X):
 
 # 模型构建，返回给定样本判定为某类别的概率
 def model(X, prams, pDropInput, pDropHidden):
-    X = utils.dropout(X, pDropInput)
+    X = basicUtils.dropout(X, pDropInput)
     h = T.nnet.relu(T.dot(X, prams[0][0]) + prams[0][1])
-    h = utils.dropout(h, pDropHidden)
+    h = basicUtils.dropout(h, pDropHidden)
     return softmax(T.dot(h, prams[1][0]) + prams[1][1])
 
 # 常量
@@ -50,11 +49,11 @@ trX, teX, trY, teY = mnist(onehot=True)
 X = T.matrix('X')
 Y = T.matrix('Y')
 prams = []  # 所有需要优化的参数放入列表中，分别是连接权重和偏置
-w1 = utils.weightInit((n, hiddens), 'w1')
-b1 = utils.biasInit((hiddens,), 'b1')
+w1 = initial.weightInit((n, hiddens), 'w1')
+b1 = initial.biasInit((hiddens,), 'b1')
 prams.append([w1, b1])
-w2 = utils.weightInit((hiddens, outputs), 'w2')
-b2 = utils.biasInit((outputs,), 'b2')
+w2 = initial.weightInit((hiddens, outputs), 'w2')
+b2 = initial.biasInit((outputs,), 'b2')
 prams.append([w2, b2])
 
 # 构建 Theano 表达式
@@ -62,8 +61,8 @@ yDropProb = model(X, prams, 0.2, 0.5)
 yFullProb = model(X, prams, 0., 0.)
 yPred = T.argmax(yFullProb, axis=1)
 crossEntropy = T.nnet.categorical_crossentropy(yDropProb, Y)
-cost = T.mean(crossEntropy) + C * utils.reg(flatten(prams))
-updates = utils.rmsprop(cost, flatten(prams), lr=learningRate)
+cost = T.mean(crossEntropy) + C * basicUtils.regularizer(flatten(prams))
+updates = gradient.rmsprop(cost, flatten(prams), lr=learningRate)
 
 # 编译函数
 train = function(

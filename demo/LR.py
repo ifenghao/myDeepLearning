@@ -1,12 +1,14 @@
 # coding:utf-8
 __author__ = 'zfh'
 
-import numpy as np
-from numpy import random as rng
-import theano.tensor as T
-from theano import function, shared
-import utils
 import matplotlib.pyplot as plt
+import numpy as np
+import theano.tensor as T
+from numpy import random as rng
+from theano import function, shared
+
+from utils import basicUtils, gradient, initial, preprocess
+
 
 # 模型构建，返回给定样本判定为某类别的概率
 def model(X, w, b):
@@ -24,7 +26,7 @@ C = 0.01
 # Theano 符号变量
 X = T.matrix('X')
 y = T.vector('y')
-w = shared(utils.floatX(np.random.randn(n) * 0.01), name='w', borrow=True)
+w = shared(basicUtils.floatX(np.random.randn(n) * 0.01), name='w', borrow=True)
 b = shared(1., name='b', borrow=True)
 
 # 构建 Theano 表达式
@@ -33,7 +35,7 @@ yPred = yProb > 0.5
 crossEntropy = -y * T.log(yProb) - (1 - y) * T.log(1 - yProb)
 cost = T.mean(crossEntropy) + C * T.mean(w ** 2)
 prams = [w, b]  # 所有需要优化的参数放入列表中
-updates = utils.sgd(cost, prams, learningRate)
+updates = basicUtils.sgd(cost, prams, learningRate)
 
 # 编译函数
 train = function(

@@ -4,17 +4,19 @@ __author__ = 'zfh'
 32滤波器产生32*16个特征图，16个按行全连接为1个特征图，32个按列全连接产生下一层的2个特征图
 顶层使用全局平均池化层
 '''
-from compiler.ast import flatten
 import time
+from compiler.ast import flatten
+from copy import copy
+
+import numpy as np
 import theano.tensor as T
+from sklearn.cross_validation import KFold
 from theano import scan
 from theano.tensor.nnet import conv2d, categorical_crossentropy, relu
 from theano.tensor.signal.pool import pool_2d
-from sklearn.cross_validation import KFold
-from copy import copy
-import numpy as np
+
 from load import cifar
-import utils
+from utils import basicUtils, gradient, initial, preprocess
 
 
 # def nin(X, param, shape):
@@ -100,19 +102,19 @@ def conv1t1(X, param):
 
 
 def layerNINParams(shape, expand):
-    w1 = utils.weightInitNIN1_3(shape, 'w1')
-    w2 = utils.weightInitNIN2_3(shape[:3], 'w2')
-    w3 = utils.weightInitColfc((shape[0], expand, shape[1]), 'w3')
-    b1 = utils.biasInit(shape[:3], 'b1')
-    b2 = utils.biasInit(shape[:2] + (1,), 'b2')
-    b3 = utils.biasInit((shape[0], expand), 'b3')
+    w1 = initial.weightInitNIN1_3(shape, 'w1')
+    w2 = initial.weightInitNIN2_3(shape[:3], 'w2')
+    w3 = initial.weightInitColfc((shape[0], expand, shape[1]), 'w3')
+    b1 = initial.biasInit(shape[:3], 'b1')
+    b2 = initial.biasInit(shape[:2] + (1,), 'b2')
+    b3 = initial.biasInit((shape[0], expand), 'b3')
     return [w1, w2, w3, b1, b2, b3]
 
 
 # 全局平均池化使用和卷积层一样的参数
 def layerConvParams(shape):
-    w = utils.weightInitCNN3(shape, 'w')
-    b = utils.biasInit(shape[0], 'b')
+    w = initial.weightInitCNN3(shape, 'w')
+    b = initial.biasInit(shape[0], 'b')
     return [w, b]
 
 
@@ -121,19 +123,19 @@ def model(X, params, pDropConv, pDropHidden):
     lnum = 0  # conv: (32, 32) pool: (16, 16)
     layer = nin(X, params[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
-    layer = utils.dropout(layer, pDropConv)
+    layer = basicUtils.dropout(layer, pDropConv)
     lnum += 1  # conv: (16, 16) pool: (8, 8)
     layer = nin(layer, params[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
-    layer = utils.dropout(layer, pDropConv)
+    layer = basicUtils.dropout(layer, pDropConv)
     lnum += 1  # conv: (8, 8) pool: (4, 4)
     layer = nin(layer, params[lnum])
     layer = pool_2d(layer, (2, 2), st=(2, 2), ignore_border=False, mode='max')
-    layer = utils.dropout(layer, pDropConv)
+    layer = basicUtils.dropout(layer, pDropConv)
     # 全局平均池化
     lnum += 1
     layer = conv1t1(layer, params[lnum])
-    layer = utils.dropout(layer, pDropHidden)
+    layer = basicUtils.dropout(layer, pDropHidden)
     lnum += 1
     layer = conv1t1(layer, params[lnum])
     layer = gap(layer)
@@ -167,48 +169,48 @@ class CConvNet(object):
         self.Y = T.matrix('Y')
         # 训练集代价函数
         YDropProb = model(self.X, self.params, pDropConv, pDropHidden)
-        self.trNeqs = utils.neqs(YDropProb, self.Y)
+        self.trNeqs = basicUtils.neqs(YDropProb, self.Y)
         trCrossEntropy = categorical_crossentropy(YDropProb, self.Y)
-        self.trCost = T.mean(trCrossEntropy) + C * utils.reg(flatten(self.params))
+        self.trCost = T.mean(trCrossEntropy) + C * basicUtils.regularizer(flatten(self.params))
 
         # 测试验证集代价函数
         YFullProb = model(self.X, self.params, 0., 0.)
-        self.vateNeqs = utils.neqs(YFullProb, self.Y)
+        self.vateNeqs = basicUtils.neqs(YFullProb, self.Y)
         self.YPred = T.argmax(YFullProb, axis=1)
         vateCrossEntropy = categorical_crossentropy(YFullProb, self.Y)
-        self.vateCost = T.mean(vateCrossEntropy) + C * utils.reg(flatten(self.params))
+        self.vateCost = T.mean(vateCrossEntropy) + C * basicUtils.regularizer(flatten(self.params))
 
     # 重置优化参数，以重新训练模型
-    def resetPrams(self):
+    def resetParams(self):
         for p in self.paramsNIN:
-            utils.resetWeightCNN3(p[0])
-            utils.resetBias(p[1])
+            initial.resetWeightCNN3(p[0])
+            initial.resetBias(p[1])
         for p in self.paramsConv:
-            utils.resetWeightMLP3(p[0])
-            utils.resetBias(p[1])
+            initial.resetWeightMLP3(p[0])
+            initial.resetBias(p[1])
 
     # 训练卷积网络，最终返回在测试集上的误差
     def traincn(self, trX, teX, trY, teY, batchSize=128, maxIter=100, verbose=True,
                 start=5, period=2, threshold=10, earlyStopTol=2, totalStopTol=2):
         lr = self.lr  # 当验证损失不再下降而早停止后，降低学习率继续迭代
         # 训练函数，输入训练集，输出训练损失和误差
-        updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
-        train = utils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
+        updates = gradient.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
+        train = basicUtils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
         # 验证或测试函数，输入验证或测试集，输出损失和误差，不进行更新
-        valtest = utils.makeFunc([self.X, self.Y], [self.vateCost, self.vateNeqs], None)
-        trX, teX = utils.preprocess(trX, teX)
-        earlyStop = utils.earlyStopGen(start, period, threshold, earlyStopTol)
+        valtest = basicUtils.makeFunc([self.X, self.Y], [self.vateCost, self.vateNeqs], None)
+        trX, teX = preprocess.preprocess4d(trX, teX)
+        earlyStop = basicUtils.earlyStopGen(start, period, threshold, earlyStopTol)
         earlyStop.next()  # 初始化生成器
         totalStopCount = 0
         for epoch in range(maxIter):  # every epoch
             startTime = time.time()
-            trCost, trError = utils.miniBatch(trX, trY, train, batchSize, verbose)
-            teCost, teError = utils.miniBatch(teX, teY, valtest, batchSize, verbose)
+            trCost, trError = basicUtils.miniBatch(trX, trY, train, batchSize, verbose)
+            teCost, teError = basicUtils.miniBatch(teX, teY, valtest, batchSize, verbose)
             if verbose: print ' time: %10.5f' % (time.time() - startTime), 'epoch ', epoch
             if earlyStop.send((trCost, teCost)):
                 lr /= 10  # 如果一次早停止发生，则学习率降低继续迭代
-                updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
-                train = utils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
+                updates = gradient.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
+                train = basicUtils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
                 totalStopCount += 1
                 if totalStopCount > totalStopTol: break  # 如果学习率降低仍然发生早停止，则退出迭代
                 if verbose: print 'learning rate decreases to ', lr
@@ -222,33 +224,33 @@ class CConvNet(object):
         for trIndex, vaIndex in kf:
             lr = self.lr  # 当验证损失不再下降而早停止后，降低学习率继续迭代
             # 训练函数，输入训练集，输出训练损失和误差
-            updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
-            train = utils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
+            updates = gradient.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
+            train = basicUtils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
             # 验证或测试函数，输入验证或测试集，输出损失和误差，不进行更新
-            valtest = utils.makeFunc([self.X, self.Y], [self.vateCost, self.vateNeqs], None)
+            valtest = basicUtils.makeFunc([self.X, self.Y], [self.vateCost, self.vateNeqs], None)
             # 分割训练集
             trX, vaX, trY, vaY = X[trIndex], X[vaIndex], Y[trIndex], Y[vaIndex]
-            trX, vaX = utils.preprocess(trX, vaX)
-            earlyStop = utils.earlyStopGen(start, period, threshold, earlyStopTol)
+            trX, vaX = preprocess.preprocess4d(trX, vaX)
+            earlyStop = basicUtils.earlyStopGen(start, period, threshold, earlyStopTol)
             earlyStop.next()  # 初始化生成器
             totalStopCount = 0
             vaErrorOpt = 1.
             for epoch in range(maxIter):  # every epoch
                 startTime = time.time()
-                trCost, trError = utils.miniBatch(trX, trY, train, batchSize, verbose)
-                vaCost, vaError = utils.miniBatch(vaX, vaY, valtest, batchSize, verbose)
+                trCost, trError = basicUtils.miniBatch(trX, trY, train, batchSize, verbose)
+                vaCost, vaError = basicUtils.miniBatch(vaX, vaY, valtest, batchSize, verbose)
                 if vaError < vaErrorOpt: vaErrorOpt = vaError
                 if verbose: print ' time: %10.5f' % (time.time() - startTime), 'epoch ', epoch
                 if earlyStop.send((trCost, vaCost)):
                     lr /= 10  # 如果一次早停止发生，则学习率降低继续迭代
-                    updates = utils.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
-                    train = utils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
+                    updates = gradient.sgdm(self.trCost, flatten(self.params), lr, nesterov=True)
+                    train = basicUtils.makeFunc([self.X, self.Y], [self.trCost, self.trNeqs], updates)
                     totalStopCount += 1
                     if totalStopCount > totalStopTol: break  # 如果学习率降低仍然发生早停止，则退出迭代
                     if verbose: print 'learning rate decreases to ', lr
             vaErrorList.append(copy(vaErrorOpt))
             if verbose: print '*' * 10, 'one validation done, best vaError', vaErrorList, '*' * 10
-            self.resetPrams()
+            self.resetParams()
             break  # 只进行一轮验证
         return np.mean(vaErrorList)
 
@@ -257,7 +259,7 @@ def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
     trX, teX, trY, teY = cifar(onehot=True)
     f1, nin1, f2, nin2, f3, nin3, expand, h1 = 16, 5, 32, 3, 64, 2, 2, 64
-    params = utils.randomSearch(nIter=10)
+    params = basicUtils.randomSearch(nIter=10)
     cvErrorList = []
     for param, num in zip(params, range(len(params))):
         lr, C = param

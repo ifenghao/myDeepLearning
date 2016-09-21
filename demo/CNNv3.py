@@ -10,16 +10,17 @@ __author__ = 'zfh'
 6、基于v1的结构增加了验证集上的超参数选取
 '''
 from compiler.ast import flatten
-import time
+from copy import copy
+
+import numpy as np
 import theano.tensor as T
+from sklearn.cross_validation import KFold
 from theano import function, In, Out
 from theano.tensor.nnet import conv2d, categorical_crossentropy, relu
 from theano.tensor.signal.pool import pool_2d
-from sklearn.cross_validation import KFold
-from copy import copy
-import numpy as np
+
 from load import cifar
-import utils
+from utils import basicUtils, gradient, initial, preprocess
 
 
 # dimshuffle维度重排，将max得到的一维向量扩展成二维矩阵，第二维维度为1，也可以用[:,None]
@@ -36,21 +37,21 @@ def model(X, params, pDropConv, pDropHidden):
     lconv1 = relu(conv2d(X, params[0][0], border_mode='half') +
                   params[0][1].dimshuffle('x', 0, 'x', 'x'))
     lds1 = pool_2d(lconv1, (2, 2), ignore_border=False)
-    lds1 = utils.dropout(lds1, pDropConv)
+    lds1 = basicUtils.dropout(lds1, pDropConv)
 
     lconv2 = relu(conv2d(lds1, params[1][0], border_mode='half') +
                   params[1][1].dimshuffle('x', 0, 'x', 'x'))
     lds2 = pool_2d(lconv2, (2, 2), ignore_border=False)
-    lds2 = utils.dropout(lds2, pDropConv)
+    lds2 = basicUtils.dropout(lds2, pDropConv)
 
     lconv3 = relu(conv2d(lds2, params[2][0], border_mode='half') +
                   params[2][1].dimshuffle('x', 0, 'x', 'x'))
     lds3 = pool_2d(lconv3, (2, 2), ignore_border=False)
-    lds3 = utils.dropout(lds3, pDropConv)
+    lds3 = basicUtils.dropout(lds3, pDropConv)
 
     lflat = T.flatten(lds3, outdim=2)
     lfull = relu(T.dot(lflat, params[3][0]) + params[3][1])
-    lfull = utils.dropout(lfull, pDropHidden)
+    lfull = basicUtils.dropout(lfull, pDropHidden)
     return softmax(T.dot(lfull, params[4][0]) + params[4][1])  # 如果使用nnet中的softmax训练产生NAN
 
 
@@ -62,25 +63,25 @@ class CConvNet(object):
         # 卷积层，w=（本层特征图个数，上层特征图个数，卷积核行数，卷积核列数），b=（本层特征图个数）
         # conv: (32, 32) = (32, 32)
         # pool: (32/2, 32/2) = (16, 16)
-        wconv1 = utils.weightInit((f1, fin, 3, 3), 'wconv1')
-        bconv1 = utils.biasInit((f1,), 'bconv1')
+        wconv1 = initial.weightInit((f1, fin, 3, 3), 'wconv1')
+        bconv1 = initial.biasInit((f1,), 'bconv1')
         self.params.append([wconv1, bconv1])
         # conv: (16, 16) = (16, 16)
         # pool: (16/2, 16/2) = (8, 8)
-        wconv2 = utils.weightInit((f2, f1, 3, 3), 'wconv2')
-        bconv2 = utils.biasInit((f2,), 'bconv2')
+        wconv2 = initial.weightInit((f2, f1, 3, 3), 'wconv2')
+        bconv2 = initial.biasInit((f2,), 'bconv2')
         self.params.append([wconv2, bconv2])
         # conv: (8, 8) = (8, 8)
         # pool: (8/2, 8/2) = (4, 4)
-        wconv3 = utils.weightInit((f3, f2, 3, 3), 'wconv3')
-        bconv3 = utils.biasInit((f3,), 'bconv3')
+        wconv3 = initial.weightInit((f3, f2, 3, 3), 'wconv3')
+        bconv3 = initial.biasInit((f3,), 'bconv3')
         self.params.append([wconv3, bconv3])
         # 全连接层，需要计算卷积最后一层的神经元个数作为MLP的输入
-        wfull = utils.weightInit((f3 * 4 * 4, hiddens), 'wfull')
-        bfull = utils.biasInit((hiddens,), 'bfull')
+        wfull = initial.weightInit((f3 * 4 * 4, hiddens), 'wfull')
+        bfull = initial.biasInit((hiddens,), 'bfull')
         self.params.append([wfull, bfull])
-        wout = utils.weightInit((hiddens, outputs), 'wout')
-        bout = utils.biasInit((outputs,), 'bout')
+        wout = initial.weightInit((hiddens, outputs), 'wout')
+        bout = initial.biasInit((outputs,), 'bout')
         self.params.append([wout, bout])
 
         # 定义 Theano 符号变量，并构建 Theano 表达式
@@ -91,11 +92,11 @@ class CConvNet(object):
         YPred = T.argmax(YFullProb, axis=1)
         # 训练集代价函数
         trCrossEntropy = categorical_crossentropy(YDropProb, Y)
-        trCost = T.mean(trCrossEntropy) + C * utils.reg(flatten(self.params))
-        updates = utils.rmsprop(trCost, flatten(self.params), lr=lr)
+        trCost = T.mean(trCrossEntropy) + C * basicUtils.regularizer(flatten(self.params))
+        updates = gradient.rmsprop(trCost, flatten(self.params), lr=lr)
         # 测试验证集代价函数
         vateCrossEntropy = categorical_crossentropy(YFullProb, Y)
-        vateCost = T.mean(vateCrossEntropy) + C * utils.reg(flatten(self.params))
+        vateCost = T.mean(vateCrossEntropy) + C * basicUtils.regularizer(flatten(self.params))
 
         # 编译函数
         # 训练函数，输入训练集，输出训练损失和误差
@@ -103,7 +104,7 @@ class CConvNet(object):
             inputs=[In(X, borrow=True, allow_downcast=True),
                     In(Y, borrow=True, allow_downcast=True)],
             outputs=[Out(trCost, borrow=True),
-                     Out(utils.neqs(YDropProb, Y), borrow=True)],  # 减少返回参数节省时间
+                     Out(basicUtils.neqs(YDropProb, Y), borrow=True)],  # 减少返回参数节省时间
             updates=updates,
             allow_input_downcast=True
         )
@@ -112,7 +113,7 @@ class CConvNet(object):
             inputs=[In(X, borrow=True, allow_downcast=True),
                     In(Y, borrow=True, allow_downcast=True)],
             outputs=[Out(vateCost, borrow=True),
-                     Out(utils.neqs(YFullProb, Y), borrow=True)],  # 减少返回参数节省时间
+                     Out(basicUtils.neqs(YFullProb, Y), borrow=True)],  # 减少返回参数节省时间
             allow_input_downcast=True
         )
         # 预测函数，只输入X，输出预测结果
@@ -125,10 +126,10 @@ class CConvNet(object):
     # 训练卷积网络，最终返回在测试集上的误差
     def traincn(self, trX, teX, trY, teY, batchSize=128, maxIter=100,
                 period=4, threshold=10, tol=2, verbose=True):
-        earlyStop = utils.earlyStopGen(period, threshold, tol)
+        earlyStop = basicUtils.earlyStopGen(period, threshold, tol)
         earlyStop.next()  # 初始化生成器
         for epoch in range(maxIter):  # every epoch
-            trCost, trError = utils.miniBatchTrain(trX, trY, self.train, batchSize, verbose)
+            trCost, trError = basicUtils.miniBatchTrain(trX, trY, self.train, batchSize, verbose)
             teCost, teError = self.valtest(teX, teY)
             if earlyStop.send((trCost, teCost)): break
             if verbose: print 'trError: %.5f   teError: %.5f' % (trError, teError)
@@ -140,32 +141,32 @@ class CConvNet(object):
         vaCostList = []
         for trIndex, vaIndex in kf:
             trX, vaX, trY, vaY = X[trIndex], X[vaIndex], Y[trIndex], Y[vaIndex]
-            earlyStop = utils.earlyStopGen(period, threshold, tol)
+            earlyStop = basicUtils.earlyStopGen(period, threshold, tol)
             earlyStop.next()  # 初始化生成器
             vaCostOpt = np.inf
             for epoch in range(maxIter):  # every epoch
-                trCost, trError = utils.miniBatchTrain(trX, trY, self.train, batchSize, verbose)
+                trCost, trError = basicUtils.miniBatchTrain(trX, trY, self.train, batchSize, verbose)
                 vaCost, vaError = self.valtest(vaX, vaY)
                 if vaCost < vaCostOpt: vaCostOpt = vaCost
                 if earlyStop.send((trCost, vaCost)): break
                 if verbose: print 'vaCost: %8.5f   vaError: %.5f' % (vaCost, vaError)
             vaCostList.append(copy(vaCostOpt))
             if verbose: print '*' * 5, 'one validation done', '*' * 5
-            self.resetPrams()
+            self.resetParams()
         return np.mean(vaCostList)
 
     # 重置优化参数，以重新训练模型
-    def resetPrams(self):
+    def resetParams(self):
         for p in self.params:
-            utils.resetWeight(p[0])
-            utils.resetBias(p[1])
+            initial.resetWeight(p[0])
+            initial.resetBias(p[1])
 
 
 def main():
     # 数据集，数据格式为4D矩阵（样本数，特征图个数，图像行数，图像列数）
     trX, teX, trY, teY = cifar(onehot=True)
     f1, f2, f3, hiddens = 32, 64, 128, 625
-    params = utils.randomSearch(nIter=30)
+    params = basicUtils.randomSearch(nIter=30)
     cvCostList = []
     for param, num in zip(params, range(len(params))):
         lr, C, pDropConv, pDropHidden = param

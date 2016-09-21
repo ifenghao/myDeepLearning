@@ -3,13 +3,13 @@ __author__ = 'zfh'
 
 import time
 
+import matplotlib.pyplot as plt
 import numpy as np
 import theano.tensor as T
 from theano import function, shared
-import matplotlib.pyplot as plt
 
 from load import mnist
-import utils
+from utils import basicUtils, gradient, initial, preprocess
 
 
 # 模型构建，返回给定样本判定为某类别的概率
@@ -33,18 +33,18 @@ trX, teX, trY, teY = mnist(onehot=True)
 # Theano 符号变量
 X = T.matrix('X')
 Y = T.matrix('Y')
-w1 = shared(utils.floatX(np.random.randn(n, hiddens) * 0.01), name='w1', borrow=True)
-b1 = shared(utils.floatX(np.zeros(hiddens)), name='b1', borrow=True)
-w2 = shared(utils.floatX(np.random.randn(hiddens, outputs) * 0.01), name='w2', borrow=True)
-b2 = shared(utils.floatX(np.zeros(outputs)), name='b2', borrow=True)
+w1 = shared(basicUtils.floatX(np.random.randn(n, hiddens) * 0.01), name='w1', borrow=True)
+b1 = shared(basicUtils.floatX(np.zeros(hiddens)), name='b1', borrow=True)
+w2 = shared(basicUtils.floatX(np.random.randn(hiddens, outputs) * 0.01), name='w2', borrow=True)
+b2 = shared(basicUtils.floatX(np.zeros(outputs)), name='b2', borrow=True)
 
 # 构建 Theano 表达式
 yProb = model(X, w1, b1, w2, b2)
 yPred = T.argmax(yProb, axis=1)
 crossEntropy = T.nnet.categorical_crossentropy(yProb, Y)
-cost = T.mean(crossEntropy) + C * utils.reg((w1, b1, w2, b2))
+cost = T.mean(crossEntropy) + C * basicUtils.regularizer((w1, b1, w2, b2))
 gradPrams = [w1, b1, w2, b2]  # 所有需要优化的参数放入列表中
-updates = utils.sgdm(cost, gradPrams, learningRate)
+updates = gradient.sgdm(cost, gradPrams, learningRate)
 
 # 编译函数
 train = function(
